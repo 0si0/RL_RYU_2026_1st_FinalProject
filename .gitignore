@@ -75,3 +75,5 @@ data/objects
 !/tools/thirdparty/HO-Cap/
 !/tools/thirdparty/main.py
 !/tools/thirdparty/embedding.sh
+*.pdf
+*.pptx
