@@ -58,6 +58,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     MANO_kpts_except_fingertips = [0, 1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15, 17, 18, 19]
     MANO_fingertips = [4, 8, 12, 16, 20]
     MANO_rigids = [0, 5, 9, 13]
+    MANO_anchors = [0, 5, 9, 13, 17]
 
     seq_ref_path = SEQ_PATH
     obj_path = OBJ_PATH
@@ -214,13 +215,21 @@ class GrEnvCfg(DirectRLEnvCfg):
     dof_penalty_scale = -0.001
 
     hand_reward_weight = 1.0
+    hand_anchor_reward_weight = 0.8
     fingertip_reward_weight = 0.5
+    fingertip_obj_proximity_reward_weight = 0.3
+    fingertip_obj_offset_reward_weight = 0.8
+    contact_reward_weight = 0.2
     obj_pos_reward_weight = 2.0
     obj_rot_reward_weight = 1.0
     obj_vel_reward_weight = 0.2
 
     hand_reward_scale = 25.0
+    hand_anchor_reward_scale = 15.0
     fingertip_reward_scale = 40.0
+    fingertip_obj_proximity_reward_scale = 8.0
+    fingertip_obj_offset_reward_scale = 15.0
+    contact_reward_max_force = 5.0
     obj_pos_reward_scale = 30.0
     obj_rot_reward_scale = 2.0
     obj_vel_reward_scale = 2.0

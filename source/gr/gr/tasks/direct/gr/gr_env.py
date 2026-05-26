@@ -327,19 +327,31 @@ class GrEnv(DirectRLEnv):
             # TODO: Pass all tensors and scalar weights required by compute_rewards().
             self.actions,
             self.hand_kpt_err,
+            self.hand_anchor_err,
             self.fingertip_err,
+            self.fingertip_obj_proximity_err,
+            self.fingertip_obj_offset_err,
+            self.contact_force,
             self.obj_pos_err,
             self.obj_rot_err,
             self.obj_linvel_error,
             self.obj_angvel_error,
             self.cfg.hand_reward_weight,
+            self.cfg.hand_anchor_reward_weight,
             self.cfg.fingertip_reward_weight,
+            self.cfg.fingertip_obj_proximity_reward_weight,
+            self.cfg.fingertip_obj_offset_reward_weight,
+            self.cfg.contact_reward_weight,
             self.cfg.obj_pos_reward_weight,
             self.cfg.obj_rot_reward_weight,
             self.cfg.obj_vel_reward_weight,
             self.cfg.action_penalty_scale,
             self.cfg.hand_reward_scale,
+            self.cfg.hand_anchor_reward_scale,
             self.cfg.fingertip_reward_scale,
+            self.cfg.fingertip_obj_proximity_reward_scale,
+            self.cfg.fingertip_obj_offset_reward_scale,
+            self.cfg.contact_reward_max_force,
             self.cfg.obj_pos_reward_scale,
             self.cfg.obj_rot_reward_scale,
             self.cfg.obj_vel_reward_scale,
@@ -455,6 +467,7 @@ class GrEnv(DirectRLEnv):
 
         self.fingertip_pos_ref = self.fingertip_pos_seq[t]
         self.mano_kpts_pos_ref = self.mano_kpts_pos_seq[t]
+        self.obj_fingertip_pos_ref_offset = self.obj_fingertip_pos_seq_offset[t]
         
         # next ref
         self.obj_pos_next = self.obj_pos_seq[t_next]
@@ -523,9 +536,11 @@ class GrEnv(DirectRLEnv):
 
         # TODO: Compute intermediate values used by observations and rewards.
         self.hand_kpt_error = self.hand_kpts_pos - self.mano_kpts_pos_ref
+        self.hand_anchor_error = self.hand_kpts_pos[:, self.cfg.MANO_anchors] - self.mano_kpts_pos_ref[:, self.cfg.MANO_anchors]
         self.fingertip_error = self.fingertip_pos - self.fingertip_pos_ref
 
         self.hand_kpt_err = torch.norm(self.hand_kpt_error, p=2, dim=-1).mean(dim=-1)
+        self.hand_anchor_err = torch.norm(self.hand_anchor_error, p=2, dim=-1).mean(dim=-1)
         self.fingertip_err = torch.norm(self.fingertip_error, p=2, dim=-1).mean(dim=-1)
 
         self.obj_pos_error = self.obj_pos - self.obj_pos_ref
@@ -541,6 +556,10 @@ class GrEnv(DirectRLEnv):
 
         self.fingertip_to_obj = self.fingertip_pos - self.obj_pos.unsqueeze(1)
         self.fingertip_obj_dist = torch.norm(self.fingertip_to_obj, p=2, dim=-1)
+        self.fingertip_obj_proximity_err = self.fingertip_obj_dist.mean(dim=-1)
+        self.fingertip_obj_offset_error = self.fingertip_to_obj - self.obj_fingertip_pos_ref_offset
+        self.fingertip_obj_offset_err = torch.norm(self.fingertip_obj_offset_error, p=2, dim=-1).mean(dim=-1)
+        self.contact_force = self.fingertip_contact_forces_buf[:, 0, :].sum(dim=-1)
 
         self.palm_to_obj = self.hand_pos - self.obj_pos
         self.palm_obj_dist = torch.norm(self.palm_to_obj, p=2, dim=-1)
@@ -609,19 +628,31 @@ def compute_rewards(
     # EX) actions: torch.Tensor,
     actions: torch.Tensor,
     hand_kpt_err: torch.Tensor,
+    hand_anchor_err: torch.Tensor,
     fingertip_err: torch.Tensor,
+    fingertip_obj_proximity_err: torch.Tensor,
+    fingertip_obj_offset_err: torch.Tensor,
+    contact_force: torch.Tensor,
     obj_pos_err: torch.Tensor,
     obj_rot_err: torch.Tensor,
     obj_linvel_error: torch.Tensor,
     obj_angvel_error: torch.Tensor,
     hand_weight: float,
+    hand_anchor_weight: float,
     fingertip_weight: float,
+    fingertip_obj_proximity_weight: float,
+    fingertip_obj_offset_weight: float,
+    contact_weight: float,
     obj_pos_weight: float,
     obj_rot_weight: float,
     obj_vel_weight: float,
     action_penalty_scale: float,
     hand_reward_scale: float,
+    hand_anchor_reward_scale: float,
     fingertip_reward_scale: float,
+    fingertip_obj_proximity_reward_scale: float,
+    fingertip_obj_offset_reward_scale: float,
+    contact_reward_max_force: float,
     obj_pos_reward_scale: float,
     obj_rot_reward_scale: float,
     obj_vel_reward_scale: float,
@@ -633,7 +664,11 @@ def compute_rewards(
     obj_vel_err = obj_linvel_err + obj_angvel_reward_scale * obj_angvel_err
 
     hand_reward = torch.exp(-hand_reward_scale * hand_kpt_err)
+    hand_anchor_reward = torch.exp(-hand_anchor_reward_scale * hand_anchor_err)
     fingertip_reward = torch.exp(-fingertip_reward_scale * fingertip_err)
+    fingertip_obj_proximity_reward = torch.exp(-fingertip_obj_proximity_reward_scale * fingertip_obj_proximity_err)
+    fingertip_obj_offset_reward = torch.exp(-fingertip_obj_offset_reward_scale * fingertip_obj_offset_err)
+    contact_reward = torch.clamp(contact_force, 0.0, contact_reward_max_force) / (contact_reward_max_force + 1.0e-6)
     obj_pos_reward = torch.exp(-obj_pos_reward_scale * obj_pos_err)
     obj_rot_reward = torch.exp(-obj_rot_reward_scale * obj_rot_err)
     obj_vel_reward = torch.exp(-obj_vel_reward_scale * obj_vel_err)
@@ -642,7 +677,11 @@ def compute_rewards(
 
     reward = (
         hand_weight * hand_reward
+        + hand_anchor_weight * hand_anchor_reward
         + fingertip_weight * fingertip_reward
+        + fingertip_obj_proximity_weight * fingertip_obj_proximity_reward
+        + fingertip_obj_offset_weight * fingertip_obj_offset_reward
+        + contact_weight * contact_reward
         + obj_pos_weight * obj_pos_reward
         + obj_rot_weight * obj_rot_reward
         + obj_vel_weight * obj_vel_reward
@@ -654,15 +693,23 @@ def compute_rewards(
     logs_dict = {
         "reward/total": reward,
         "reward/hand": hand_reward,
+        "reward/hand_anchor": hand_anchor_reward,
         "reward/fingertip": fingertip_reward,
+        "reward/fingertip_obj_proximity": fingertip_obj_proximity_reward,
+        "reward/fingertip_obj_offset": fingertip_obj_offset_reward,
+        "reward/contact": contact_reward,
         "reward/object_pos": obj_pos_reward,
         "reward/object_rot": obj_rot_reward,
         "reward/object_vel": obj_vel_reward,
         "penalty/action": action_penalty,
         "error/hand_kpt": hand_kpt_err,
+        "error/hand_anchor": hand_anchor_err,
         "error/fingertip": fingertip_err,
+        "error/fingertip_obj_proximity": fingertip_obj_proximity_err,
+        "error/fingertip_obj_offset": fingertip_obj_offset_err,
         "error/object_pos": obj_pos_err,
         "error/object_rot": obj_rot_err,
+        "metric/contact_force": contact_force,
     }
     
     return reward, logs_dict
