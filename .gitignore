@@ -77,3 +77,4 @@ data/objects
 !/tools/thirdparty/embedding.sh
 *.pdf
 *.pptx
+*.md
