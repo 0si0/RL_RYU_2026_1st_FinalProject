@@ -40,7 +40,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     asymmetric_obs = False
     
     # TODO: Match this dimension to the observation vector built in gr_env.py.
-    observation_space = 
+    observation_space = 176
 
     # env
     decimation = 4
@@ -53,7 +53,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     root_body = 'robot0_palm'
 
 
-    body_to_kpts_except_fingertips = [0, 5, 20, 22 , 1, 11, 16, 2, 12, 17, 3, 13, 18, 9, 19, 21]
+    body_to_kpts_except_fingertips = [0, 5, 20, 22, 1, 11, 16, 2, 12, 17, 3, 13, 18, 9, 19, 21]
     MANO_kpts = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
     MANO_kpts_except_fingertips = [0, 1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15, 17, 18, 19]
     MANO_fingertips = [4, 8, 12, 16, 20]
@@ -212,6 +212,22 @@ class GrEnvCfg(DirectRLEnvCfg):
     
     action_penalty_scale = -0.004
     dof_penalty_scale = -0.001
+
+    hand_reward_weight = 1.0
+    fingertip_reward_weight = 0.5
+    obj_pos_reward_weight = 2.0
+    obj_rot_reward_weight = 1.0
+    obj_vel_reward_weight = 0.2
+
+    hand_reward_scale = 25.0
+    fingertip_reward_scale = 40.0
+    obj_pos_reward_scale = 30.0
+    obj_rot_reward_scale = 2.0
+    obj_vel_reward_scale = 2.0
+    obj_angvel_reward_scale = 0.2
+
+    hand_terminate_threshold = 0.35
+    obj_terminate_threshold = 0.35
 
     act_moving_average = 0.5
     global_moving_average = 0.2

@@ -325,6 +325,25 @@ class GrEnv(DirectRLEnv):
             logs_dict,
         ) = compute_rewards(
             # TODO: Pass all tensors and scalar weights required by compute_rewards().
+            self.actions,
+            self.hand_kpt_err,
+            self.fingertip_err,
+            self.obj_pos_err,
+            self.obj_rot_err,
+            self.obj_linvel_error,
+            self.obj_angvel_error,
+            self.cfg.hand_reward_weight,
+            self.cfg.fingertip_reward_weight,
+            self.cfg.obj_pos_reward_weight,
+            self.cfg.obj_rot_reward_weight,
+            self.cfg.obj_vel_reward_weight,
+            self.cfg.action_penalty_scale,
+            self.cfg.hand_reward_scale,
+            self.cfg.fingertip_reward_scale,
+            self.cfg.obj_pos_reward_scale,
+            self.cfg.obj_rot_reward_scale,
+            self.cfg.obj_vel_reward_scale,
+            self.cfg.obj_angvel_reward_scale,
         )
 
         for key, value in logs_dict.items():
@@ -503,6 +522,36 @@ class GrEnv(DirectRLEnv):
         self._collect_state()
 
         # TODO: Compute intermediate values used by observations and rewards.
+        self.hand_kpt_error = self.hand_kpts_pos - self.mano_kpts_pos_ref
+        self.fingertip_error = self.fingertip_pos - self.fingertip_pos_ref
+
+        self.hand_kpt_err = torch.norm(self.hand_kpt_error, p=2, dim=-1).mean(dim=-1)
+        self.fingertip_err = torch.norm(self.fingertip_error, p=2, dim=-1).mean(dim=-1)
+
+        self.obj_pos_error = self.obj_pos - self.obj_pos_ref
+        self.obj_pos_err = torch.norm(self.obj_pos_error, p=2, dim=-1)
+
+        self.obj_rot_error_quat = quat_mul(self.obj_rot, quat_conjugate(self.obj_rot_ref))
+        obj_rot_vec_norm = torch.norm(self.obj_rot_error_quat[:, 1:4], p=2, dim=-1)
+        obj_rot_w = torch.abs(self.obj_rot_error_quat[:, 0])
+        self.obj_rot_err = 2.0 * torch.atan2(obj_rot_vec_norm, obj_rot_w)
+
+        self.obj_linvel_error = self.obj_linvel - self.obj_linvel_ref
+        self.obj_angvel_error = self.obj_angvel - self.obj_angvel_ref
+
+        self.fingertip_to_obj = self.fingertip_pos - self.obj_pos.unsqueeze(1)
+        self.fingertip_obj_dist = torch.norm(self.fingertip_to_obj, p=2, dim=-1)
+
+        self.palm_to_obj = self.hand_pos - self.obj_pos
+        self.palm_obj_dist = torch.norm(self.palm_to_obj, p=2, dim=-1)
+
+        self.delta_obj_pos = self.obj_pos_error
+        self.delta_obj_pos_value = self.obj_pos_err
+        self.delta_fingertip_pos = torch.norm(self.fingertip_error, p=2, dim=-1)
+
+        self.hand_far_apart = self.hand_kpt_err > self.cfg.hand_terminate_threshold
+        self.obj_far_apart = self.obj_pos_err > self.cfg.obj_terminate_threshold
+        self.early_terminate = torch.logical_or(self.hand_far_apart, self.obj_far_apart)
 
         if not self.play:
             # Point visualization for debugging; you may change which points are shown.
@@ -513,11 +562,32 @@ class GrEnv(DirectRLEnv):
 
 
     def compute_full_observations(self):
+        obs_parts = (
+            unscale(self.hand_dof_pos, self.hand_dof_lower_limits, self.hand_dof_upper_limits),
+            self.hand_dof_vel * self.cfg.vel_obs_scale,
+
+            self.hand_pos - self.obj_pos,
+            quat_to_6d(self.hand_rot),
+            self.hand_linvel * self.cfg.vel_obs_scale,
+            self.hand_angvel * self.cfg.vel_obs_scale,
+
+            self.obj_pos,
+            quat_to_6d(self.obj_rot),
+            self.obj_linvel * self.cfg.vel_obs_scale,
+            self.obj_angvel * self.cfg.vel_obs_scale,
+
+            self.hand_kpt_error.reshape(self.num_envs, -1),
+            self.fingertip_to_obj.reshape(self.num_envs, -1),
+
+            self.obj_pos_error,
+            quat_to_6d(self.obj_rot_error_quat),
+
+            self.fingertip_contact_forces_buf.reshape(self.num_envs, -1),
+        )
         obs = torch.cat(
-            (
-                # TODO: Build the policy observation vector.
-                # Its final dimension must match cfg.observation_space.
-            ),
+            # TODO: Build the policy observation vector.
+            # Its final dimension must match cfg.observation_space.
+            obs_parts,
             dim=-1,
         )
         return obs
@@ -537,12 +607,62 @@ def unscale(x, lower, upper):
 def compute_rewards(
     # TODO: Define the reward function inputs with TorchScript-compatible types.
     # EX) actions: torch.Tensor,
+    actions: torch.Tensor,
+    hand_kpt_err: torch.Tensor,
+    fingertip_err: torch.Tensor,
+    obj_pos_err: torch.Tensor,
+    obj_rot_err: torch.Tensor,
+    obj_linvel_error: torch.Tensor,
+    obj_angvel_error: torch.Tensor,
+    hand_weight: float,
+    fingertip_weight: float,
+    obj_pos_weight: float,
+    obj_rot_weight: float,
+    obj_vel_weight: float,
+    action_penalty_scale: float,
+    hand_reward_scale: float,
+    fingertip_reward_scale: float,
+    obj_pos_reward_scale: float,
+    obj_rot_reward_scale: float,
+    obj_vel_reward_scale: float,
+    obj_angvel_reward_scale: float,
 ):
     # TODO: Compute rewards and combine them into the final reward.
+    obj_linvel_err = torch.norm(obj_linvel_error, p=2, dim=-1)
+    obj_angvel_err = torch.norm(obj_angvel_error, p=2, dim=-1)
+    obj_vel_err = obj_linvel_err + obj_angvel_reward_scale * obj_angvel_err
+
+    hand_reward = torch.exp(-hand_reward_scale * hand_kpt_err)
+    fingertip_reward = torch.exp(-fingertip_reward_scale * fingertip_err)
+    obj_pos_reward = torch.exp(-obj_pos_reward_scale * obj_pos_err)
+    obj_rot_reward = torch.exp(-obj_rot_reward_scale * obj_rot_err)
+    obj_vel_reward = torch.exp(-obj_vel_reward_scale * obj_vel_err)
+
+    action_penalty = torch.sum(actions * actions, dim=-1)
+
+    reward = (
+        hand_weight * hand_reward
+        + fingertip_weight * fingertip_reward
+        + obj_pos_weight * obj_pos_reward
+        + obj_rot_weight * obj_rot_reward
+        + obj_vel_weight * obj_vel_reward
+        + action_penalty_scale * action_penalty
+    )
+
     reward = torch.clamp_min(reward, 0.0)
 
     logs_dict = {
         "reward/total": reward,
+        "reward/hand": hand_reward,
+        "reward/fingertip": fingertip_reward,
+        "reward/object_pos": obj_pos_reward,
+        "reward/object_rot": obj_rot_reward,
+        "reward/object_vel": obj_vel_reward,
+        "penalty/action": action_penalty,
+        "error/hand_kpt": hand_kpt_err,
+        "error/fingertip": fingertip_err,
+        "error/object_pos": obj_pos_err,
+        "error/object_rot": obj_rot_err,
     }
     
     return reward, logs_dict
