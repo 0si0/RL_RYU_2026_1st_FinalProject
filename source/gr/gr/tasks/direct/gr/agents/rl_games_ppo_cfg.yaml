@@ -52,6 +52,7 @@ params:
 
     ppo: True
     mixed_precision: False
+    torch_compile: False
 
     # Input/value normalization and GAE
     normalize_input: True
