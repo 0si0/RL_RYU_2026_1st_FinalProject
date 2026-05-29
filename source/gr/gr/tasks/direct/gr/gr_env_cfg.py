@@ -219,7 +219,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     fingertip_reward_weight = 0.5
     fingertip_obj_proximity_reward_weight = 0.3
     fingertip_obj_offset_reward_weight = 0.8
-    contact_reward_weight = 0.2
+    contact_reward_weight = 1.2
     obj_pos_reward_weight = 2.0
     obj_rot_reward_weight = 1.0
     obj_vel_reward_weight = 0.2
@@ -229,6 +229,12 @@ class GrEnvCfg(DirectRLEnvCfg):
     fingertip_reward_scale = 40.0
     fingertip_obj_proximity_reward_scale = 8.0
     fingertip_obj_offset_reward_scale = 15.0
+    proximity_gate_scale = 4.0
+    object_reward_gate_base = 0.2
+    contact_force_reward_weight = 0.5
+    contact_count_reward_weight = 0.5
+    contact_force_threshold = 0.02
+    target_contact_fingers = 3.0
     contact_reward_max_force = 5.0
     obj_pos_reward_scale = 30.0
     obj_rot_reward_scale = 2.0
