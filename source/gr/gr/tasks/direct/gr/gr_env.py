@@ -116,6 +116,8 @@ class GrEnv(DirectRLEnv):
         # fingertip force
         self.fingertip_contact_forces = torch.zeros((self.num_envs, self.num_fingertips,3), device=self.device)
         self.fingertip_contact_forces_buf = torch.zeros((self.num_envs, 3, self.num_fingertips), device=self.device)
+        self.fingertip_contact_force_norm = torch.zeros((self.num_envs, self.num_fingertips), device=self.device)
+        self.contact_duration = torch.zeros((self.num_envs, ), device=self.device)
 
         # joint limits
         joint_pos_limits = self.hand.root_physx_view.get_dof_limits().to(self.device)
@@ -330,10 +332,15 @@ class GrEnv(DirectRLEnv):
             self.hand_anchor_err,
             self.fingertip_err,
             self.fingertip_obj_proximity_err,
+            self.fingertip_obj_topk_proximity_err,
             self.fingertip_obj_offset_err,
             self.contact_force,
+            self.projected_contact_force,
+            self.max_contact_force,
             self.num_contact_fingers,
             self.proximity_gate,
+            self.contact_sustain,
+            self.object_lift,
             self.obj_pos_err,
             self.obj_rot_err,
             self.obj_linvel_error,
@@ -356,6 +363,8 @@ class GrEnv(DirectRLEnv):
             self.cfg.object_reward_gate_base,
             self.cfg.contact_force_reward_weight,
             self.cfg.contact_count_reward_weight,
+            self.cfg.contact_sustain_reward_weight,
+            self.cfg.lift_support_reward_weight,
             self.cfg.target_contact_fingers,
             self.cfg.contact_reward_max_force,
             self.cfg.obj_pos_reward_scale,
@@ -400,6 +409,7 @@ class GrEnv(DirectRLEnv):
         self.logs_dict = dict()
         
         self.successes[env_ids] = 0
+        self.contact_duration[env_ids] = 0
         self._compute_intermediate_values()
 
 
@@ -532,7 +542,9 @@ class GrEnv(DirectRLEnv):
         for i in range(self.num_fingertips):
             force = self.contact_sensors[i].data.force_matrix_w
             self.fingertip_contact_forces[:, i] = force[:, 0, 0]
+        self.fingertip_contact_force_norm = torch.norm(self.fingertip_contact_forces, p=2, dim=-1)
         self.fingertip_contact_forces_buf[:, 0] = torch.clamp_min((self.fingertip_contact_forces * (-self.normal)).sum(dim=-1), 0)
+        self.fingertip_contact_forces_buf[:, 1] = self.fingertip_contact_force_norm
 
 
 
@@ -563,12 +575,37 @@ class GrEnv(DirectRLEnv):
         self.fingertip_to_obj = self.fingertip_pos - self.obj_pos.unsqueeze(1)
         self.fingertip_obj_dist = torch.norm(self.fingertip_to_obj, p=2, dim=-1)
         self.fingertip_obj_proximity_err = self.fingertip_obj_dist.mean(dim=-1)
+        topk_count = min(self.cfg.contact_topk_fingers, self.num_fingertips)
+        self.fingertip_obj_topk_proximity_err = torch.topk(
+            self.fingertip_obj_dist,
+            k=topk_count,
+            dim=-1,
+            largest=False,
+        ).values.mean(dim=-1)
         self.fingertip_obj_offset_error = self.fingertip_to_obj - self.obj_fingertip_pos_ref_offset
         self.fingertip_obj_offset_err = torch.norm(self.fingertip_obj_offset_error, p=2, dim=-1).mean(dim=-1)
-        self.contact_force = self.fingertip_contact_forces_buf[:, 0, :].sum(dim=-1)
-        self.contact_active = (self.fingertip_contact_forces_buf[:, 0, :] > self.cfg.contact_force_threshold).float()
+        self.projected_contact_force = self.fingertip_contact_forces_buf[:, 0, :].sum(dim=-1)
+        self.contact_force = self.fingertip_contact_force_norm.sum(dim=-1)
+        self.max_contact_force = self.fingertip_contact_force_norm.max(dim=-1).values
+        self.contact_active = (self.fingertip_contact_force_norm > self.cfg.contact_force_threshold).float()
+        self.fingertip_contact_forces_buf[:, 2] = self.contact_active
         self.num_contact_fingers = self.contact_active.sum(dim=-1)
-        self.proximity_gate = torch.exp(-self.cfg.proximity_gate_scale * self.fingertip_obj_proximity_err)
+        self.contact_duration = torch.where(
+            self.num_contact_fingers > 0,
+            self.contact_duration + 1.0,
+            torch.zeros_like(self.contact_duration),
+        )
+        self.contact_sustain = torch.clamp(
+            self.contact_duration / (self.cfg.contact_sustain_target_steps + 1.0e-6),
+            0.0,
+            1.0,
+        )
+        self.object_lift = torch.clamp(
+            (self.obj_pos[:, 2] - self.obj_pos_reset[:, 2]) / (self.cfg.lift_target_height + 1.0e-6),
+            0.0,
+            1.0,
+        )
+        self.proximity_gate = torch.exp(-self.cfg.proximity_gate_scale * self.fingertip_obj_topk_proximity_err)
 
         self.palm_to_obj = self.hand_pos - self.obj_pos
         self.palm_obj_dist = torch.norm(self.palm_to_obj, p=2, dim=-1)
@@ -640,10 +677,15 @@ def compute_rewards(
     hand_anchor_err: torch.Tensor,
     fingertip_err: torch.Tensor,
     fingertip_obj_proximity_err: torch.Tensor,
+    fingertip_obj_topk_proximity_err: torch.Tensor,
     fingertip_obj_offset_err: torch.Tensor,
     contact_force: torch.Tensor,
+    projected_contact_force: torch.Tensor,
+    max_contact_force: torch.Tensor,
     num_contact_fingers: torch.Tensor,
     proximity_gate: torch.Tensor,
+    contact_sustain: torch.Tensor,
+    object_lift: torch.Tensor,
     obj_pos_err: torch.Tensor,
     obj_rot_err: torch.Tensor,
     obj_linvel_error: torch.Tensor,
@@ -666,6 +708,8 @@ def compute_rewards(
     object_reward_gate_base: float,
     contact_force_reward_weight: float,
     contact_count_reward_weight: float,
+    contact_sustain_reward_weight: float,
+    lift_support_reward_weight: float,
     target_contact_fingers: float,
     contact_reward_max_force: float,
     obj_pos_reward_scale: float,
@@ -681,18 +725,27 @@ def compute_rewards(
     hand_reward = torch.exp(-hand_reward_scale * hand_kpt_err)
     hand_anchor_reward = torch.exp(-hand_anchor_reward_scale * hand_anchor_err)
     fingertip_reward = torch.exp(-fingertip_reward_scale * fingertip_err)
-    fingertip_obj_proximity_reward = torch.exp(-fingertip_obj_proximity_reward_scale * fingertip_obj_proximity_err)
+    fingertip_obj_proximity_reward = torch.exp(-fingertip_obj_proximity_reward_scale * fingertip_obj_topk_proximity_err)
     fingertip_obj_offset_reward = torch.exp(-fingertip_obj_offset_reward_scale * fingertip_obj_offset_err)
     contact_force_reward = torch.clamp(contact_force, 0.0, contact_reward_max_force) / (contact_reward_max_force + 1.0e-6)
     contact_count_reward = torch.clamp(num_contact_fingers / (target_contact_fingers + 1.0e-6), 0.0, 1.0)
+    contact_sustain_reward = torch.clamp(contact_sustain, 0.0, 1.0)
     contact_reward = proximity_gate * (
         contact_force_reward_weight * contact_force_reward
         + contact_count_reward_weight * contact_count_reward
+        + contact_sustain_reward_weight * contact_sustain_reward
     )
     obj_pos_reward = torch.exp(-obj_pos_reward_scale * obj_pos_err)
     obj_rot_reward = torch.exp(-obj_rot_reward_scale * obj_rot_err)
     obj_vel_reward = torch.exp(-obj_vel_reward_scale * obj_vel_err)
     object_gate = object_reward_gate_base + (1.0 - object_reward_gate_base) * proximity_gate
+    contact_gate = torch.clamp(num_contact_fingers / (target_contact_fingers + 1.0e-6), 0.0, 1.0)
+    lift_reward = torch.clamp(object_lift, 0.0, 1.0)
+    lift_support_reward = contact_gate * contact_sustain_reward * (
+        0.4 * lift_reward
+        + 0.3 * obj_pos_reward
+        + 0.3 * fingertip_obj_offset_reward
+    )
 
     action_penalty = torch.sum(actions * actions, dim=-1)
 
@@ -706,6 +759,7 @@ def compute_rewards(
         + object_gate * obj_pos_weight * obj_pos_reward
         + object_gate * obj_rot_weight * obj_rot_reward
         + object_gate * obj_vel_weight * obj_vel_reward
+        + lift_support_reward_weight * lift_support_reward
         + action_penalty_scale * action_penalty
     )
 
@@ -721,21 +775,29 @@ def compute_rewards(
         "reward/contact": contact_reward,
         "reward/contact_force": contact_force_reward,
         "reward/contact_count": contact_count_reward,
+        "reward/contact_sustain": contact_sustain_reward,
+        "reward/lift_support": lift_support_reward,
+        "reward/lift": lift_reward,
         "reward/object_pos": obj_pos_reward,
         "reward/object_rot": obj_rot_reward,
         "reward/object_vel": obj_vel_reward,
         "metric/proximity_gate": proximity_gate,
         "metric/object_gate": object_gate,
         "metric/contact_fingers": num_contact_fingers,
+        "metric/contact_sustain": contact_sustain_reward,
         "penalty/action": action_penalty,
         "error/hand_kpt": hand_kpt_err,
         "error/hand_anchor": hand_anchor_err,
         "error/fingertip": fingertip_err,
         "error/fingertip_obj_proximity": fingertip_obj_proximity_err,
+        "error/fingertip_obj_proximity_topk": fingertip_obj_topk_proximity_err,
         "error/fingertip_obj_offset": fingertip_obj_offset_err,
         "error/object_pos": obj_pos_err,
         "error/object_rot": obj_rot_err,
         "metric/contact_force": contact_force,
+        "metric/contact_force_projected": projected_contact_force,
+        "metric/contact_force_max": max_contact_force,
+        "metric/object_lift": object_lift,
     }
     
     return reward, logs_dict

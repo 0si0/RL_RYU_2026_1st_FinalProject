@@ -233,9 +233,14 @@ class GrEnvCfg(DirectRLEnvCfg):
     object_reward_gate_base = 0.2
     contact_force_reward_weight = 0.5
     contact_count_reward_weight = 0.5
-    contact_force_threshold = 0.02
+    contact_sustain_reward_weight = 0.4
+    lift_support_reward_weight = 0.8
+    contact_force_threshold = 0.005
     target_contact_fingers = 3.0
-    contact_reward_max_force = 5.0
+    contact_reward_max_force = 0.2
+    contact_topk_fingers = 3
+    contact_sustain_target_steps = 8.0
+    lift_target_height = 0.08
     obj_pos_reward_scale = 30.0
     obj_rot_reward_scale = 2.0
     obj_vel_reward_scale = 2.0
