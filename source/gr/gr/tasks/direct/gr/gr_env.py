@@ -338,6 +338,11 @@ class GrEnv(DirectRLEnv):
             self.projected_contact_force,
             self.max_contact_force,
             self.num_contact_fingers,
+            self.thumb_contact,
+            self.non_thumb_contact_fingers,
+            self.thumb_proximity_err,
+            self.non_thumb_topk_proximity_err,
+            self.opposition,
             self.proximity_gate,
             self.contact_sustain,
             self.object_lift,
@@ -365,7 +370,10 @@ class GrEnv(DirectRLEnv):
             self.cfg.contact_count_reward_weight,
             self.cfg.contact_sustain_reward_weight,
             self.cfg.lift_support_reward_weight,
+            self.cfg.finger_role_reward_weight,
+            self.cfg.opposition_reward_weight,
             self.cfg.target_contact_fingers,
+            self.cfg.target_non_thumb_contact_fingers,
             self.cfg.contact_reward_max_force,
             self.cfg.obj_pos_reward_scale,
             self.cfg.obj_rot_reward_scale,
@@ -590,6 +598,21 @@ class GrEnv(DirectRLEnv):
         self.contact_active = (self.fingertip_contact_force_norm > self.cfg.contact_force_threshold).float()
         self.fingertip_contact_forces_buf[:, 2] = self.contact_active
         self.num_contact_fingers = self.contact_active.sum(dim=-1)
+        self.thumb_contact = self.contact_active[:, 0]
+        self.non_thumb_contact_fingers = self.contact_active[:, 1:].sum(dim=-1)
+        self.thumb_proximity_err = self.fingertip_obj_dist[:, 0]
+        non_thumb_topk_count = min(self.cfg.non_thumb_topk_fingers, self.num_fingertips - 1)
+        self.non_thumb_topk_proximity_err = torch.topk(
+            self.fingertip_obj_dist[:, 1:],
+            k=non_thumb_topk_count,
+            dim=-1,
+            largest=False,
+        ).values.mean(dim=-1)
+        thumb_vec = F.normalize(self.fingertip_to_obj[:, 0], dim=-1)
+        non_thumb_weights = self.contact_active[:, 1:] + torch.exp(-self.cfg.proximity_gate_scale * self.fingertip_obj_dist[:, 1:])
+        non_thumb_weights = non_thumb_weights / (non_thumb_weights.sum(dim=-1, keepdim=True) + 1.0e-6)
+        non_thumb_vec = F.normalize((self.fingertip_to_obj[:, 1:] * non_thumb_weights.unsqueeze(-1)).sum(dim=1), dim=-1)
+        self.opposition = torch.clamp((-(thumb_vec * non_thumb_vec).sum(dim=-1) + 1.0) * 0.5, 0.0, 1.0)
         self.contact_duration = torch.where(
             self.num_contact_fingers > 0,
             self.contact_duration + 1.0,
@@ -683,6 +706,11 @@ def compute_rewards(
     projected_contact_force: torch.Tensor,
     max_contact_force: torch.Tensor,
     num_contact_fingers: torch.Tensor,
+    thumb_contact: torch.Tensor,
+    non_thumb_contact_fingers: torch.Tensor,
+    thumb_proximity_err: torch.Tensor,
+    non_thumb_topk_proximity_err: torch.Tensor,
+    opposition: torch.Tensor,
     proximity_gate: torch.Tensor,
     contact_sustain: torch.Tensor,
     object_lift: torch.Tensor,
@@ -710,7 +738,10 @@ def compute_rewards(
     contact_count_reward_weight: float,
     contact_sustain_reward_weight: float,
     lift_support_reward_weight: float,
+    finger_role_reward_weight: float,
+    opposition_reward_weight: float,
     target_contact_fingers: float,
+    target_non_thumb_contact_fingers: float,
     contact_reward_max_force: float,
     obj_pos_reward_scale: float,
     obj_rot_reward_scale: float,
@@ -730,6 +761,20 @@ def compute_rewards(
     contact_force_reward = torch.clamp(contact_force, 0.0, contact_reward_max_force) / (contact_reward_max_force + 1.0e-6)
     contact_count_reward = torch.clamp(num_contact_fingers / (target_contact_fingers + 1.0e-6), 0.0, 1.0)
     contact_sustain_reward = torch.clamp(contact_sustain, 0.0, 1.0)
+    thumb_proximity_reward = torch.exp(-fingertip_obj_proximity_reward_scale * thumb_proximity_err)
+    non_thumb_proximity_reward = torch.exp(-fingertip_obj_proximity_reward_scale * non_thumb_topk_proximity_err)
+    non_thumb_contact_reward = torch.clamp(
+        non_thumb_contact_fingers / (target_non_thumb_contact_fingers + 1.0e-6),
+        0.0,
+        1.0,
+    )
+    grasp_role_gate = thumb_contact * non_thumb_contact_reward
+    finger_role_reward = proximity_gate * (
+        0.25 * thumb_proximity_reward
+        + 0.25 * non_thumb_proximity_reward
+        + 0.50 * grasp_role_gate
+    )
+    opposition_reward = opposition * thumb_proximity_reward * non_thumb_proximity_reward * (0.25 + 0.75 * grasp_role_gate)
     contact_reward = proximity_gate * (
         contact_force_reward_weight * contact_force_reward
         + contact_count_reward_weight * contact_count_reward
@@ -739,9 +784,8 @@ def compute_rewards(
     obj_rot_reward = torch.exp(-obj_rot_reward_scale * obj_rot_err)
     obj_vel_reward = torch.exp(-obj_vel_reward_scale * obj_vel_err)
     object_gate = object_reward_gate_base + (1.0 - object_reward_gate_base) * proximity_gate
-    contact_gate = torch.clamp(num_contact_fingers / (target_contact_fingers + 1.0e-6), 0.0, 1.0)
     lift_reward = torch.clamp(object_lift, 0.0, 1.0)
-    lift_support_reward = contact_gate * contact_sustain_reward * (
+    lift_support_reward = grasp_role_gate * contact_sustain_reward * (
         0.4 * lift_reward
         + 0.3 * obj_pos_reward
         + 0.3 * fingertip_obj_offset_reward
@@ -760,6 +804,8 @@ def compute_rewards(
         + object_gate * obj_rot_weight * obj_rot_reward
         + object_gate * obj_vel_weight * obj_vel_reward
         + lift_support_reward_weight * lift_support_reward
+        + finger_role_reward_weight * finger_role_reward
+        + opposition_reward_weight * opposition_reward
         + action_penalty_scale * action_penalty
     )
 
@@ -778,6 +824,11 @@ def compute_rewards(
         "reward/contact_sustain": contact_sustain_reward,
         "reward/lift_support": lift_support_reward,
         "reward/lift": lift_reward,
+        "reward/finger_role": finger_role_reward,
+        "reward/opposition": opposition_reward,
+        "reward/thumb_proximity": thumb_proximity_reward,
+        "reward/non_thumb_proximity": non_thumb_proximity_reward,
+        "reward/non_thumb_contact": non_thumb_contact_reward,
         "reward/object_pos": obj_pos_reward,
         "reward/object_rot": obj_rot_reward,
         "reward/object_vel": obj_vel_reward,
@@ -785,12 +836,18 @@ def compute_rewards(
         "metric/object_gate": object_gate,
         "metric/contact_fingers": num_contact_fingers,
         "metric/contact_sustain": contact_sustain_reward,
+        "metric/thumb_contact": thumb_contact,
+        "metric/non_thumb_contact_fingers": non_thumb_contact_fingers,
+        "metric/grasp_role_gate": grasp_role_gate,
+        "metric/opposition": opposition,
         "penalty/action": action_penalty,
         "error/hand_kpt": hand_kpt_err,
         "error/hand_anchor": hand_anchor_err,
         "error/fingertip": fingertip_err,
         "error/fingertip_obj_proximity": fingertip_obj_proximity_err,
         "error/fingertip_obj_proximity_topk": fingertip_obj_topk_proximity_err,
+        "error/thumb_proximity": thumb_proximity_err,
+        "error/non_thumb_topk_proximity": non_thumb_topk_proximity_err,
         "error/fingertip_obj_offset": fingertip_obj_offset_err,
         "error/object_pos": obj_pos_err,
         "error/object_rot": obj_rot_err,
