@@ -390,11 +390,13 @@ class GrEnv(DirectRLEnv):
             self.cfg.contact_count_reward_weight,
             self.cfg.contact_sustain_reward_weight,
             self.cfg.lift_support_reward_weight,
+            self.cfg.thumb_proximity_reward_weight,
             self.cfg.finger_role_reward_weight,
             self.cfg.opposition_reward_weight,
             self.cfg.target_contact_fingers,
             self.cfg.target_non_thumb_contact_fingers,
             self.cfg.contact_reward_max_force,
+            self.cfg.lift_contact_gate_floor,
             self.cfg.obj_pos_reward_scale,
             self.cfg.obj_rot_reward_scale,
             self.cfg.obj_vel_reward_scale,
@@ -759,11 +761,13 @@ def compute_rewards(
     contact_count_reward_weight: float,
     contact_sustain_reward_weight: float,
     lift_support_reward_weight: float,
+    thumb_proximity_reward_weight: float,
     finger_role_reward_weight: float,
     opposition_reward_weight: float,
     target_contact_fingers: float,
     target_non_thumb_contact_fingers: float,
     contact_reward_max_force: float,
+    lift_contact_gate_floor: float,
     obj_pos_reward_scale: float,
     obj_rot_reward_scale: float,
     obj_vel_reward_scale: float,
@@ -791,11 +795,12 @@ def compute_rewards(
     )
     grasp_role_gate = thumb_contact * non_thumb_contact_reward
     contact_gate = torch.clamp(num_contact_fingers / (target_contact_fingers + 1.0e-6), 0.0, 1.0)
-    lift_gate = (1.0 - role_curriculum) * contact_gate + role_curriculum * grasp_role_gate
+    soft_grasp_gate = lift_contact_gate_floor * contact_gate + (1.0 - lift_contact_gate_floor) * grasp_role_gate
+    lift_gate = (1.0 - role_curriculum) * contact_gate + role_curriculum * soft_grasp_gate
     finger_role_reward = proximity_gate * (
-        0.25 * thumb_proximity_reward
-        + 0.25 * non_thumb_proximity_reward
-        + 0.50 * grasp_role_gate
+        0.35 * thumb_proximity_reward
+        + 0.20 * non_thumb_proximity_reward
+        + 0.45 * grasp_role_gate
     )
     opposition_reward = opposition * thumb_proximity_reward * non_thumb_proximity_reward * (0.25 + 0.75 * grasp_role_gate)
     contact_reward = proximity_gate * (
@@ -827,6 +832,7 @@ def compute_rewards(
         + object_gate * obj_rot_weight * obj_rot_reward
         + object_gate * obj_vel_weight * obj_vel_reward
         + lift_support_reward_weight * lift_support_reward
+        + thumb_proximity_reward_weight * proximity_gate * thumb_proximity_reward
         + role_curriculum * finger_role_reward_weight * finger_role_reward
         + role_curriculum * opposition_reward_weight * opposition_reward
         + action_penalty_scale * action_penalty
@@ -850,6 +856,7 @@ def compute_rewards(
         "reward/finger_role": finger_role_reward,
         "reward/opposition": opposition_reward,
         "reward/thumb_proximity": thumb_proximity_reward,
+        "reward/thumb_proximity_shaped": proximity_gate * thumb_proximity_reward,
         "reward/non_thumb_proximity": non_thumb_proximity_reward,
         "reward/non_thumb_contact": non_thumb_contact_reward,
         "reward/object_pos": obj_pos_reward,
@@ -862,6 +869,7 @@ def compute_rewards(
         "metric/thumb_contact": thumb_contact,
         "metric/non_thumb_contact_fingers": non_thumb_contact_fingers,
         "metric/grasp_role_gate": grasp_role_gate,
+        "metric/soft_grasp_gate": soft_grasp_gate,
         "metric/lift_gate": lift_gate,
         "metric/finger_role_curriculum": role_curriculum,
         "metric/opposition": opposition,

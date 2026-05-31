@@ -234,9 +234,10 @@ class GrEnvCfg(DirectRLEnvCfg):
     contact_force_reward_weight = 0.5
     contact_count_reward_weight = 0.5
     contact_sustain_reward_weight = 0.4
-    lift_support_reward_weight = 0.8
-    finger_role_reward_weight = 0.8
-    opposition_reward_weight = 0.8
+    lift_support_reward_weight = 1.2
+    thumb_proximity_reward_weight = 0.3
+    finger_role_reward_weight = 0.4
+    opposition_reward_weight = 0.3
     contact_force_threshold = 0.005
     target_contact_fingers = 3.0
     target_non_thumb_contact_fingers = 2.0
@@ -244,6 +245,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     contact_topk_fingers = 3
     non_thumb_topk_fingers = 2
     contact_sustain_target_steps = 8.0
+    lift_contact_gate_floor = 0.35
     finger_role_curriculum_start_step = 1200
     finger_role_curriculum_end_step = 3200
     lift_target_height = 0.08
