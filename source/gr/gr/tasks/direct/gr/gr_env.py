@@ -393,6 +393,9 @@ class GrEnv(DirectRLEnv):
             self.cfg.thumb_proximity_reward_weight,
             self.cfg.finger_role_reward_weight,
             self.cfg.opposition_reward_weight,
+            self.cfg.early_anchor_reward_bonus,
+            self.cfg.contact_curriculum_min,
+            self.cfg.lift_curriculum_min,
             self.cfg.target_contact_fingers,
             self.cfg.target_non_thumb_contact_fingers,
             self.cfg.contact_reward_max_force,
@@ -764,6 +767,9 @@ def compute_rewards(
     thumb_proximity_reward_weight: float,
     finger_role_reward_weight: float,
     opposition_reward_weight: float,
+    early_anchor_reward_bonus: float,
+    contact_curriculum_min: float,
+    lift_curriculum_min: float,
     target_contact_fingers: float,
     target_non_thumb_contact_fingers: float,
     contact_reward_max_force: float,
@@ -777,6 +783,10 @@ def compute_rewards(
     obj_linvel_err = torch.norm(obj_linvel_error, p=2, dim=-1)
     obj_angvel_err = torch.norm(obj_angvel_error, p=2, dim=-1)
     obj_vel_err = obj_linvel_err + obj_angvel_reward_scale * obj_angvel_err
+    early_curriculum = 1.0 - role_curriculum
+    anchor_curriculum_scale = 1.0 + early_anchor_reward_bonus * early_curriculum
+    contact_curriculum_scale = contact_curriculum_min + (1.0 - contact_curriculum_min) * role_curriculum
+    lift_curriculum_scale = lift_curriculum_min + (1.0 - lift_curriculum_min) * role_curriculum
 
     hand_reward = torch.exp(-hand_reward_scale * hand_kpt_err)
     hand_anchor_reward = torch.exp(-hand_anchor_reward_scale * hand_anchor_err)
@@ -823,16 +833,16 @@ def compute_rewards(
 
     reward = (
         hand_weight * hand_reward
-        + hand_anchor_weight * hand_anchor_reward
+        + hand_anchor_weight * anchor_curriculum_scale * hand_anchor_reward
         + fingertip_weight * fingertip_reward
         + fingertip_obj_proximity_weight * fingertip_obj_proximity_reward
         + fingertip_obj_offset_weight * fingertip_obj_offset_reward
-        + contact_weight * contact_reward
+        + contact_curriculum_scale * contact_weight * contact_reward
         + object_gate * obj_pos_weight * obj_pos_reward
         + object_gate * obj_rot_weight * obj_rot_reward
         + object_gate * obj_vel_weight * obj_vel_reward
-        + lift_support_reward_weight * lift_support_reward
-        + thumb_proximity_reward_weight * proximity_gate * thumb_proximity_reward
+        + lift_curriculum_scale * lift_support_reward_weight * lift_support_reward
+        + contact_curriculum_scale * thumb_proximity_reward_weight * proximity_gate * thumb_proximity_reward
         + role_curriculum * finger_role_reward_weight * finger_role_reward
         + role_curriculum * opposition_reward_weight * opposition_reward
         + action_penalty_scale * action_penalty
@@ -872,6 +882,9 @@ def compute_rewards(
         "metric/soft_grasp_gate": soft_grasp_gate,
         "metric/lift_gate": lift_gate,
         "metric/finger_role_curriculum": role_curriculum,
+        "metric/anchor_curriculum_scale": anchor_curriculum_scale,
+        "metric/contact_curriculum_scale": contact_curriculum_scale,
+        "metric/lift_curriculum_scale": lift_curriculum_scale,
         "metric/opposition": opposition,
         "penalty/action": action_penalty,
         "error/hand_kpt": hand_kpt_err,

@@ -238,6 +238,9 @@ class GrEnvCfg(DirectRLEnvCfg):
     thumb_proximity_reward_weight = 0.3
     finger_role_reward_weight = 0.4
     opposition_reward_weight = 0.3
+    early_anchor_reward_bonus = 1.0
+    contact_curriculum_min = 0.25
+    lift_curriculum_min = 0.20
     contact_force_threshold = 0.005
     target_contact_fingers = 3.0
     target_non_thumb_contact_fingers = 2.0
