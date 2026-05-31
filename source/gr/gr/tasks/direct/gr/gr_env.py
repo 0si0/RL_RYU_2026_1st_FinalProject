@@ -322,6 +322,25 @@ class GrEnv(DirectRLEnv):
 
 
     def _get_rewards(self) -> torch.Tensor:
+        role_curriculum = torch.full(
+            (self.num_envs,),
+            float(
+                np.clip(
+                    (
+                        getattr(self, "common_step_counter", 0)
+                        - self.cfg.finger_role_curriculum_start_step
+                    )
+                    / max(
+                        1,
+                        self.cfg.finger_role_curriculum_end_step
+                        - self.cfg.finger_role_curriculum_start_step,
+                    ),
+                    0.0,
+                    1.0,
+                )
+            ),
+            device=self.device,
+        )
         (
             total_reward,
             logs_dict,
@@ -343,6 +362,7 @@ class GrEnv(DirectRLEnv):
             self.thumb_proximity_err,
             self.non_thumb_topk_proximity_err,
             self.opposition,
+            role_curriculum,
             self.proximity_gate,
             self.contact_sustain,
             self.object_lift,
@@ -711,6 +731,7 @@ def compute_rewards(
     thumb_proximity_err: torch.Tensor,
     non_thumb_topk_proximity_err: torch.Tensor,
     opposition: torch.Tensor,
+    role_curriculum: torch.Tensor,
     proximity_gate: torch.Tensor,
     contact_sustain: torch.Tensor,
     object_lift: torch.Tensor,
@@ -769,6 +790,8 @@ def compute_rewards(
         1.0,
     )
     grasp_role_gate = thumb_contact * non_thumb_contact_reward
+    contact_gate = torch.clamp(num_contact_fingers / (target_contact_fingers + 1.0e-6), 0.0, 1.0)
+    lift_gate = (1.0 - role_curriculum) * contact_gate + role_curriculum * grasp_role_gate
     finger_role_reward = proximity_gate * (
         0.25 * thumb_proximity_reward
         + 0.25 * non_thumb_proximity_reward
@@ -785,7 +808,7 @@ def compute_rewards(
     obj_vel_reward = torch.exp(-obj_vel_reward_scale * obj_vel_err)
     object_gate = object_reward_gate_base + (1.0 - object_reward_gate_base) * proximity_gate
     lift_reward = torch.clamp(object_lift, 0.0, 1.0)
-    lift_support_reward = grasp_role_gate * contact_sustain_reward * (
+    lift_support_reward = lift_gate * contact_sustain_reward * (
         0.4 * lift_reward
         + 0.3 * obj_pos_reward
         + 0.3 * fingertip_obj_offset_reward
@@ -804,8 +827,8 @@ def compute_rewards(
         + object_gate * obj_rot_weight * obj_rot_reward
         + object_gate * obj_vel_weight * obj_vel_reward
         + lift_support_reward_weight * lift_support_reward
-        + finger_role_reward_weight * finger_role_reward
-        + opposition_reward_weight * opposition_reward
+        + role_curriculum * finger_role_reward_weight * finger_role_reward
+        + role_curriculum * opposition_reward_weight * opposition_reward
         + action_penalty_scale * action_penalty
     )
 
@@ -839,6 +862,8 @@ def compute_rewards(
         "metric/thumb_contact": thumb_contact,
         "metric/non_thumb_contact_fingers": non_thumb_contact_fingers,
         "metric/grasp_role_gate": grasp_role_gate,
+        "metric/lift_gate": lift_gate,
+        "metric/finger_role_curriculum": role_curriculum,
         "metric/opposition": opposition,
         "penalty/action": action_penalty,
         "error/hand_kpt": hand_kpt_err,

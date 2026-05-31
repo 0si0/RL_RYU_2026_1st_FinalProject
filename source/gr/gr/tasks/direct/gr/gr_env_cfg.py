@@ -244,6 +244,8 @@ class GrEnvCfg(DirectRLEnvCfg):
     contact_topk_fingers = 3
     non_thumb_topk_fingers = 2
     contact_sustain_target_steps = 8.0
+    finger_role_curriculum_start_step = 1200
+    finger_role_curriculum_end_step = 3200
     lift_target_height = 0.08
     obj_pos_reward_scale = 30.0
     obj_rot_reward_scale = 2.0
