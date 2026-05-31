@@ -241,6 +241,15 @@ class GrEnvCfg(DirectRLEnvCfg):
     early_anchor_reward_bonus = 1.0
     contact_curriculum_min = 0.25
     lift_curriculum_min = 0.20
+    hit_without_grasp_penalty_weight = 0.35
+    topple_penalty_weight = 0.6
+    object_lost_penalty_weight = 0.4
+    hit_motion_tolerance = 0.05
+    hit_motion_scale = 1.0
+    topple_rot_threshold = 1.2
+    topple_pos_threshold = 0.25
+    object_lost_distance = 0.35
+    object_lost_distance_scale = 0.25
     contact_force_threshold = 0.005
     target_contact_fingers = 3.0
     target_non_thumb_contact_fingers = 2.0

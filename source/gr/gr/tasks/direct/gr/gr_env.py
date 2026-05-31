@@ -396,6 +396,15 @@ class GrEnv(DirectRLEnv):
             self.cfg.early_anchor_reward_bonus,
             self.cfg.contact_curriculum_min,
             self.cfg.lift_curriculum_min,
+            self.cfg.hit_without_grasp_penalty_weight,
+            self.cfg.topple_penalty_weight,
+            self.cfg.object_lost_penalty_weight,
+            self.cfg.hit_motion_tolerance,
+            self.cfg.hit_motion_scale,
+            self.cfg.topple_rot_threshold,
+            self.cfg.topple_pos_threshold,
+            self.cfg.object_lost_distance,
+            self.cfg.object_lost_distance_scale,
             self.cfg.target_contact_fingers,
             self.cfg.target_non_thumb_contact_fingers,
             self.cfg.contact_reward_max_force,
@@ -770,6 +779,15 @@ def compute_rewards(
     early_anchor_reward_bonus: float,
     contact_curriculum_min: float,
     lift_curriculum_min: float,
+    hit_without_grasp_penalty_weight: float,
+    topple_penalty_weight: float,
+    object_lost_penalty_weight: float,
+    hit_motion_tolerance: float,
+    hit_motion_scale: float,
+    topple_rot_threshold: float,
+    topple_pos_threshold: float,
+    object_lost_distance: float,
+    object_lost_distance_scale: float,
     target_contact_fingers: float,
     target_non_thumb_contact_fingers: float,
     contact_reward_max_force: float,
@@ -828,6 +846,34 @@ def compute_rewards(
         + 0.3 * obj_pos_reward
         + 0.3 * fingertip_obj_offset_reward
     )
+    good_transport_gate = torch.clamp(soft_grasp_gate * contact_sustain_reward, 0.0, 1.0)
+    motion_error_penalty = torch.clamp(
+        (obj_vel_err - hit_motion_tolerance) / (hit_motion_scale + 1.0e-6),
+        0.0,
+        1.0,
+    )
+    topple_rot_penalty = torch.clamp(
+        (obj_rot_err - topple_rot_threshold) / (3.14159 - topple_rot_threshold + 1.0e-6),
+        0.0,
+        1.0,
+    )
+    topple_pos_penalty = torch.clamp(
+        (obj_pos_err - topple_pos_threshold) / (topple_pos_threshold + 1.0e-6),
+        0.0,
+        1.0,
+    )
+    topple_penalty = torch.clamp(0.7 * topple_rot_penalty + 0.3 * topple_pos_penalty, 0.0, 1.0)
+    object_lost_penalty = (1.0 - contact_gate) * torch.clamp(
+        (fingertip_obj_topk_proximity_err - object_lost_distance) / (object_lost_distance_scale + 1.0e-6),
+        0.0,
+        1.0,
+    )
+    hit_without_grasp_penalty = (1.0 - good_transport_gate) * motion_error_penalty
+    task_failure_penalty = role_curriculum * (
+        hit_without_grasp_penalty_weight * hit_without_grasp_penalty
+        + topple_penalty_weight * (1.0 - good_transport_gate) * topple_penalty
+        + object_lost_penalty_weight * object_lost_penalty
+    )
 
     action_penalty = torch.sum(actions * actions, dim=-1)
 
@@ -846,6 +892,7 @@ def compute_rewards(
         + role_curriculum * finger_role_reward_weight * finger_role_reward
         + role_curriculum * opposition_reward_weight * opposition_reward
         + action_penalty_scale * action_penalty
+        - task_failure_penalty
     )
 
     reward = torch.clamp_min(reward, 0.0)
@@ -872,6 +919,10 @@ def compute_rewards(
         "reward/object_pos": obj_pos_reward,
         "reward/object_rot": obj_rot_reward,
         "reward/object_vel": obj_vel_reward,
+        "penalty/task_failure": task_failure_penalty,
+        "penalty/hit_without_grasp": hit_without_grasp_penalty,
+        "penalty/topple": topple_penalty,
+        "penalty/object_lost": object_lost_penalty,
         "metric/proximity_gate": proximity_gate,
         "metric/object_gate": object_gate,
         "metric/contact_fingers": num_contact_fingers,
@@ -880,6 +931,7 @@ def compute_rewards(
         "metric/non_thumb_contact_fingers": non_thumb_contact_fingers,
         "metric/grasp_role_gate": grasp_role_gate,
         "metric/soft_grasp_gate": soft_grasp_gate,
+        "metric/good_transport_gate": good_transport_gate,
         "metric/lift_gate": lift_gate,
         "metric/finger_role_curriculum": role_curriculum,
         "metric/anchor_curriculum_scale": anchor_curriculum_scale,
