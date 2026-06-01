@@ -202,6 +202,10 @@ class GrEnv(DirectRLEnv):
         self.hand_pos_reset[:,2] = self.hand_pos_reset[:,2] + 0.01
         self.hand_pos_reset_base = self.hand_pos_reset.clone()
         self.hand_rot_reset_base = self.hand_rot_reset.clone()
+        self.hand_rot_ref_seq = build_anchor_rot_ref_seq(
+            self.mano_kpts_pos_seq,
+            self.hand_rot_reset_base[0],
+        )
     
 
     def _setup_scene(self):
@@ -524,7 +528,7 @@ class GrEnv(DirectRLEnv):
         self.obj_fingertip_pos_ref_offset = self.obj_fingertip_pos_seq_offset[t]
         hand_anchor_delta = self.mano_anchor_center_seq[t] - self.mano_anchor_center_seq[0]
         self.hand_pos_ref = self.hand_pos_reset_base + hand_anchor_delta
-        self.hand_rot_ref = self.hand_rot_reset_base
+        self.hand_rot_ref = self.hand_rot_ref_seq[t]
         self.hand_obj_ref_offset = self.hand_pos_ref - self.obj_pos_ref
         self.anchor_obj_ref_offset = self.mano_anchor_center_seq[t] - self.obj_pos_ref
         
@@ -949,6 +953,29 @@ def compute_rewards(
 
 
 # Utils
+def build_anchor_rot_ref_seq(mano_kpts_pos_seq: torch.Tensor, hand_rot_reset: torch.Tensor) -> torch.Tensor:
+    wrist = mano_kpts_pos_seq[:, 0]
+    index_base = mano_kpts_pos_seq[:, 5]
+    middle_base = mano_kpts_pos_seq[:, 9]
+    little_base = mano_kpts_pos_seq[:, 17]
+
+    x_axis = F.normalize(index_base - little_base, dim=-1)
+    y_hint = F.normalize(middle_base - wrist, dim=-1)
+    z_axis = F.normalize(torch.cross(x_axis, y_hint, dim=-1), dim=-1)
+    y_axis = F.normalize(torch.cross(z_axis, x_axis, dim=-1), dim=-1)
+
+    mano_rot_seq = quat_from_matrix(torch.stack((x_axis, y_axis, z_axis), dim=-2))
+    mano_delta_seq = quat_mul(
+        mano_rot_seq,
+        quat_conjugate(mano_rot_seq[0:1]).expand_as(mano_rot_seq),
+    )
+    hand_rot_ref_seq = quat_mul(
+        mano_delta_seq,
+        hand_rot_reset.unsqueeze(0).expand_as(mano_delta_seq),
+    )
+    return F.normalize(hand_rot_ref_seq, dim=-1)
+
+
 def quat_to_6d(quat: torch.Tensor) -> torch.Tensor:
     return matrix_to_rotation_6d(matrix_from_quat(F.normalize(quat, dim=-1)))
 
