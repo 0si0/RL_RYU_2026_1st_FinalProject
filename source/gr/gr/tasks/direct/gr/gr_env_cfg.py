@@ -241,6 +241,9 @@ class GrEnvCfg(DirectRLEnvCfg):
     early_imitation_reward_bonus = 1.0
     late_task_reward_bonus = 1.0
     reward_curriculum_steps = 18000
+    no_contact_grace_steps = 60.0
+    no_contact_late_reward_floor = 0.05
+    no_grasp_rotation_penalty_weight = 0.10
     contact_force_threshold = 0.005
     target_contact_fingers = 3.0
     contact_reward_max_force = 0.2

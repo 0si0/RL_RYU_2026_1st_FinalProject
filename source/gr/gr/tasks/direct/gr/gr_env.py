@@ -118,6 +118,7 @@ class GrEnv(DirectRLEnv):
         self.fingertip_contact_forces_buf = torch.zeros((self.num_envs, 3, self.num_fingertips), device=self.device)
         self.fingertip_contact_force_norm = torch.zeros((self.num_envs, self.num_fingertips), device=self.device)
         self.contact_duration = torch.zeros((self.num_envs, ), device=self.device)
+        self.no_contact_duration = torch.zeros((self.num_envs, ), device=self.device)
 
         # joint limits
         joint_pos_limits = self.hand.root_physx_view.get_dof_limits().to(self.device)
@@ -352,6 +353,7 @@ class GrEnv(DirectRLEnv):
             self.num_contact_fingers,
             self.proximity_gate,
             self.contact_sustain,
+            self.no_contact_sustain,
             self.object_lift,
             self.obj_pos_err,
             self.obj_rot_err,
@@ -383,6 +385,8 @@ class GrEnv(DirectRLEnv):
             self.cfg.lift_support_reward_weight,
             self.cfg.early_imitation_reward_bonus,
             self.cfg.late_task_reward_bonus,
+            self.cfg.no_contact_late_reward_floor,
+            self.cfg.no_grasp_rotation_penalty_weight,
             self.cfg.target_contact_fingers,
             self.cfg.contact_reward_max_force,
             self.cfg.obj_pos_reward_scale,
@@ -428,6 +432,7 @@ class GrEnv(DirectRLEnv):
         
         self.successes[env_ids] = 0
         self.contact_duration[env_ids] = 0
+        self.no_contact_duration[env_ids] = 0
         self._compute_intermediate_values()
 
 
@@ -618,8 +623,18 @@ class GrEnv(DirectRLEnv):
             self.contact_duration + 1.0,
             torch.zeros_like(self.contact_duration),
         )
+        self.no_contact_duration = torch.where(
+            self.num_contact_fingers > 0,
+            torch.zeros_like(self.no_contact_duration),
+            self.no_contact_duration + 1.0,
+        )
         self.contact_sustain = torch.clamp(
             self.contact_duration / (self.cfg.contact_sustain_target_steps + 1.0e-6),
+            0.0,
+            1.0,
+        )
+        self.no_contact_sustain = torch.clamp(
+            self.no_contact_duration / (self.cfg.no_contact_grace_steps + 1.0e-6),
             0.0,
             1.0,
         )
@@ -709,6 +724,7 @@ def compute_rewards(
     num_contact_fingers: torch.Tensor,
     proximity_gate: torch.Tensor,
     contact_sustain: torch.Tensor,
+    no_contact_sustain: torch.Tensor,
     object_lift: torch.Tensor,
     obj_pos_err: torch.Tensor,
     obj_rot_err: torch.Tensor,
@@ -740,6 +756,8 @@ def compute_rewards(
     lift_support_reward_weight: float,
     early_imitation_reward_bonus: float,
     late_task_reward_bonus: float,
+    no_contact_late_reward_floor: float,
+    no_grasp_rotation_penalty_weight: float,
     target_contact_fingers: float,
     contact_reward_max_force: float,
     obj_pos_reward_scale: float,
@@ -754,6 +772,8 @@ def compute_rewards(
     early_curriculum = 1.0 - curriculum_progress
     imitation_scale = 1.0 + early_imitation_reward_bonus * early_curriculum
     task_scale = 1.0 + late_task_reward_bonus * curriculum_progress
+    late_no_contact = curriculum_progress * no_contact_sustain
+    late_contact_reward_gate = 1.0 - (1.0 - no_contact_late_reward_floor) * late_no_contact
 
     hand_reward = torch.exp(-hand_reward_scale * hand_kpt_err)
     hand_anchor_reward = torch.exp(-hand_anchor_reward_scale * hand_anchor_err)
@@ -783,12 +803,13 @@ def compute_rewards(
     )
 
     action_penalty = torch.sum(actions * actions, dim=-1)
+    no_grasp_rotation_penalty = curriculum_progress * (1.0 - contact_gate) * torch.norm(actions[:, 3:9], p=2, dim=-1)
 
     reward = (
-        imitation_scale * hand_weight * hand_reward
-        + imitation_scale * hand_anchor_weight * hand_anchor_reward
-        + imitation_scale * hand_rot_weight * hand_rot_reward
-        + imitation_scale * fingertip_weight * fingertip_reward
+        late_contact_reward_gate * imitation_scale * hand_weight * hand_reward
+        + late_contact_reward_gate * imitation_scale * hand_anchor_weight * hand_anchor_reward
+        + late_contact_reward_gate * imitation_scale * hand_rot_weight * hand_rot_reward
+        + late_contact_reward_gate * imitation_scale * fingertip_weight * fingertip_reward
         + fingertip_obj_proximity_weight * fingertip_obj_proximity_reward
         + fingertip_obj_offset_weight * fingertip_obj_offset_reward
         + task_scale * contact_weight * contact_reward
@@ -797,6 +818,7 @@ def compute_rewards(
         + object_gate * obj_vel_weight * obj_vel_reward
         + task_scale * lift_support_reward_weight * lift_support_reward
         + action_penalty_scale * action_penalty
+        - no_grasp_rotation_penalty_weight * no_grasp_rotation_penalty
     )
 
     reward = torch.clamp_min(reward, 0.0)
@@ -824,9 +846,12 @@ def compute_rewards(
         "metric/imitation_scale": imitation_scale,
         "metric/task_scale": task_scale,
         "metric/anchor_rotation_gate": anchor_rotation_gate,
+        "metric/late_contact_reward_gate": late_contact_reward_gate,
+        "metric/no_contact_sustain": no_contact_sustain,
         "metric/contact_fingers": num_contact_fingers,
         "metric/contact_sustain": contact_sustain_reward,
         "penalty/action": action_penalty,
+        "penalty/no_grasp_rotation": no_grasp_rotation_penalty,
         "error/hand_kpt": hand_kpt_err,
         "error/hand_anchor": hand_anchor_err,
         "error/hand_rot": hand_rot_err,
