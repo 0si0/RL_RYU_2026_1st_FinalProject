@@ -419,6 +419,10 @@ class GrEnv(DirectRLEnv):
             self.cfg.early_imitation_reward_bonus,
             self.cfg.early_episode_tracking_bonus,
             self.cfg.early_lag_penalty_weight,
+            self.cfg.approach_imitation_bonus,
+            self.cfg.grasp_object_bonus,
+            self.cfg.manipulation_task_bonus,
+            self.cfg.manipulation_imitation_bonus,
             self.cfg.object_relative_reward_base,
             self.cfg.mid_object_relative_reward_bonus,
             self.cfg.late_task_reward_bonus,
@@ -838,6 +842,10 @@ def compute_rewards(
     early_imitation_reward_bonus: float,
     early_episode_tracking_bonus: float,
     early_lag_penalty_weight: float,
+    approach_imitation_bonus: float,
+    grasp_object_bonus: float,
+    manipulation_task_bonus: float,
+    manipulation_imitation_bonus: float,
     object_relative_reward_base: float,
     mid_object_relative_reward_bonus: float,
     late_task_reward_bonus: float,
@@ -857,15 +865,28 @@ def compute_rewards(
     obj_vel_err = obj_linvel_err + obj_angvel_reward_scale * obj_angvel_err
     early_curriculum = 1.0 - curriculum_progress
     mid_curriculum = 1.0 - torch.abs(2.0 * curriculum_progress - 1.0)
-    position_imitation_scale = 1.0 + 0.5 * early_imitation_reward_bonus * early_curriculum
-    pose_imitation_scale = 1.0 + early_imitation_reward_bonus * early_curriculum
-    early_episode_tracking_scale = 1.0 + early_episode_tracking_bonus * early_episode_gate
+    approach_phase = early_episode_gate
+    grasp_phase = (1.0 - approach_phase) * (1.0 - contact_sustain)
+    manipulation_phase = contact_sustain
+    approach_imitation_scale = 1.0 + approach_imitation_bonus * approach_phase
+    position_imitation_scale = (
+        1.0
+        + 0.5 * early_imitation_reward_bonus * early_curriculum
+        + early_episode_tracking_bonus * approach_phase
+    ) * approach_imitation_scale
+    pose_imitation_scale = (
+        1.0
+        + early_imitation_reward_bonus * early_curriculum
+        + early_episode_tracking_bonus * approach_phase
+    ) * approach_imitation_scale
+    mano_regrasp_scale = 1.0 + manipulation_imitation_bonus * manipulation_phase
     object_relative_scale = object_relative_reward_base + mid_object_relative_reward_bonus * torch.clamp(
         curriculum_progress + mid_curriculum,
         0.0,
         1.0,
     )
-    task_scale = 1.0 + late_task_reward_bonus * curriculum_progress
+    grasp_object_scale = 1.0 + grasp_object_bonus * grasp_phase
+    task_scale = 1.0 + late_task_reward_bonus * curriculum_progress + manipulation_task_bonus * manipulation_phase
     late_no_contact = curriculum_progress * no_contact_sustain
     late_contact_reward_gate = 1.0 - (1.0 - no_contact_late_reward_floor) * late_no_contact
     anchor_object_gate = anchor_object_gate_floor + (1.0 - anchor_object_gate_floor) * (
@@ -914,17 +935,17 @@ def compute_rewards(
     early_lag_penalty = early_episode_gate * (hand_pos_err + hand_anchor_err)
 
     reward = (
-        position_imitation_scale * early_episode_tracking_scale * hand_pos_weight * hand_pos_reward
-        + pose_imitation_scale * early_episode_tracking_scale * hand_anchor_weight * hand_anchor_reward
-        + object_relative_scale * hand_obj_offset_weight * hand_obj_offset_reward
-        + object_relative_scale * anchor_obj_offset_weight * anchor_obj_offset_reward
+        position_imitation_scale * mano_regrasp_scale * hand_pos_weight * hand_pos_reward
+        + pose_imitation_scale * mano_regrasp_scale * hand_anchor_weight * hand_anchor_reward
+        + grasp_object_scale * object_relative_scale * hand_obj_offset_weight * hand_obj_offset_reward
+        + grasp_object_scale * object_relative_scale * anchor_obj_offset_weight * anchor_obj_offset_reward
         + pose_imitation_scale * hand_dof_weight * hand_dof_reward
         + late_contact_reward_gate * pose_imitation_scale * hand_weight * hand_reward
-        + late_contact_reward_gate * anchor_object_gate * hand_rot_weight * hand_rot_reward
+        + late_contact_reward_gate * mano_regrasp_scale * anchor_object_gate * hand_rot_weight * hand_rot_reward
         + late_contact_reward_gate * pose_imitation_scale * fingertip_weight * fingertip_reward
-        + fingertip_obj_proximity_weight * fingertip_obj_proximity_reward
-        + object_relative_scale * fingertip_obj_offset_weight * fingertip_obj_offset_reward
-        + task_scale * contact_weight * contact_reward
+        + grasp_object_scale * fingertip_obj_proximity_weight * fingertip_obj_proximity_reward
+        + grasp_object_scale * object_relative_scale * fingertip_obj_offset_weight * fingertip_obj_offset_reward
+        + grasp_object_scale * task_scale * contact_weight * contact_reward
         + object_gate * obj_pos_weight * obj_pos_reward
         + object_gate * obj_rot_weight * obj_rot_reward
         + object_gate * obj_vel_weight * obj_vel_reward
@@ -941,7 +962,6 @@ def compute_rewards(
         "reward/hand": hand_reward,
         "reward/hand_pos": hand_pos_reward,
         "reward/hand_anchor": hand_anchor_reward,
-        "reward/early_episode_tracking_scale": early_episode_tracking_scale,
         "reward/hand_obj_offset": hand_obj_offset_reward,
         "reward/anchor_obj_offset": anchor_obj_offset_reward,
         "reward/hand_dof": hand_dof_reward,
@@ -962,8 +982,13 @@ def compute_rewards(
         "metric/object_gate": object_gate,
         "metric/curriculum_progress": curriculum_progress,
         "metric/mid_curriculum": mid_curriculum,
+        "metric/approach_phase": approach_phase,
+        "metric/grasp_phase": grasp_phase,
+        "metric/manipulation_phase": manipulation_phase,
         "metric/position_imitation_scale": position_imitation_scale,
         "metric/pose_imitation_scale": pose_imitation_scale,
+        "metric/mano_regrasp_scale": mano_regrasp_scale,
+        "metric/grasp_object_scale": grasp_object_scale,
         "metric/object_relative_scale": object_relative_scale,
         "metric/task_scale": task_scale,
         "metric/anchor_position_gate": anchor_position_gate,

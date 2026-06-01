@@ -250,6 +250,10 @@ class GrEnvCfg(DirectRLEnvCfg):
     early_episode_tracking_frames = 70.0
     early_episode_tracking_bonus = 0.8
     early_lag_penalty_weight = 1.0
+    approach_imitation_bonus = 0.5
+    grasp_object_bonus = 0.5
+    manipulation_task_bonus = 0.6
+    manipulation_imitation_bonus = 0.4
     object_relative_reward_base = 0.35
     mid_object_relative_reward_bonus = 1.0
     late_task_reward_bonus = 1.0
