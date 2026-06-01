@@ -352,8 +352,6 @@ class GrEnv(DirectRLEnv):
             self.hand_anchor_err,
             self.hand_obj_offset_err,
             self.anchor_obj_offset_err,
-            self.hand_vel_err,
-            self.fingertip_vel_err,
             self.hand_rot_err,
             self.fingertip_err,
             self.fingertip_obj_proximity_err,
@@ -377,8 +375,6 @@ class GrEnv(DirectRLEnv):
             self.cfg.hand_anchor_reward_weight,
             self.cfg.hand_obj_offset_reward_weight,
             self.cfg.anchor_obj_offset_reward_weight,
-            self.cfg.hand_vel_reward_weight,
-            self.cfg.fingertip_vel_reward_weight,
             self.cfg.hand_rot_reward_weight,
             self.cfg.fingertip_reward_weight,
             self.cfg.fingertip_obj_proximity_reward_weight,
@@ -393,8 +389,6 @@ class GrEnv(DirectRLEnv):
             self.cfg.hand_anchor_reward_scale,
             self.cfg.hand_obj_offset_reward_scale,
             self.cfg.anchor_obj_offset_reward_scale,
-            self.cfg.hand_vel_reward_scale,
-            self.cfg.fingertip_vel_reward_scale,
             self.cfg.hand_rot_reward_scale,
             self.cfg.anchor_rotation_gate_scale,
             self.cfg.fingertip_reward_scale,
@@ -549,8 +543,6 @@ class GrEnv(DirectRLEnv):
         self.hand_dof_next = self.hand_dof_seq[t_next]
         self.fingertip_pos_next = self.fingertip_pos_seq[t_next]
         self.mano_kpts_pos_next = self.mano_kpts_pos_seq[t_next]
-        self.hand_vel_ref = (self.mano_anchor_center_seq[t_next] - self.mano_anchor_center_seq[t]) / self.cfg.action_dt
-        self.fingertip_vel_ref = (self.fingertip_pos_next - self.fingertip_pos_ref) / self.cfg.action_dt
 
 
     def _collect_state(self):
@@ -627,12 +619,6 @@ class GrEnv(DirectRLEnv):
             p=2,
             dim=-1,
         )
-        self.hand_vel_err = torch.norm(self.hand_linvel - self.hand_vel_ref, p=2, dim=-1)
-        self.fingertip_vel_err = torch.norm(
-            self.fingertip_linvel - self.fingertip_vel_ref,
-            p=2,
-            dim=-1,
-        ).mean(dim=-1)
 
         self.hand_rot_error_quat = quat_mul(self.hand_rot, quat_conjugate(self.hand_rot_ref))
         hand_rot_vec_norm = torch.norm(self.hand_rot_error_quat[:, 1:4], p=2, dim=-1)
@@ -766,8 +752,6 @@ def compute_rewards(
     hand_anchor_err: torch.Tensor,
     hand_obj_offset_err: torch.Tensor,
     anchor_obj_offset_err: torch.Tensor,
-    hand_vel_err: torch.Tensor,
-    fingertip_vel_err: torch.Tensor,
     hand_rot_err: torch.Tensor,
     fingertip_err: torch.Tensor,
     fingertip_obj_proximity_err: torch.Tensor,
@@ -791,8 +775,6 @@ def compute_rewards(
     hand_anchor_weight: float,
     hand_obj_offset_weight: float,
     anchor_obj_offset_weight: float,
-    hand_vel_weight: float,
-    fingertip_vel_weight: float,
     hand_rot_weight: float,
     fingertip_weight: float,
     fingertip_obj_proximity_weight: float,
@@ -807,8 +789,6 @@ def compute_rewards(
     hand_anchor_reward_scale: float,
     hand_obj_offset_reward_scale: float,
     anchor_obj_offset_reward_scale: float,
-    hand_vel_reward_scale: float,
-    fingertip_vel_reward_scale: float,
     hand_rot_reward_scale: float,
     anchor_rotation_gate_scale: float,
     fingertip_reward_scale: float,
@@ -841,7 +821,6 @@ def compute_rewards(
     mid_curriculum = 1.0 - torch.abs(2.0 * curriculum_progress - 1.0)
     position_imitation_scale = 1.0 + 0.5 * early_imitation_reward_bonus * early_curriculum
     pose_imitation_scale = 1.0 + early_imitation_reward_bonus * early_curriculum
-    velocity_imitation_scale = 1.0 - 0.5 * curriculum_progress
     object_relative_scale = object_relative_reward_base + mid_object_relative_reward_bonus * torch.clamp(
         curriculum_progress + mid_curriculum,
         0.0,
@@ -859,8 +838,6 @@ def compute_rewards(
     hand_anchor_reward = torch.exp(-hand_anchor_reward_scale * hand_anchor_err)
     hand_obj_offset_reward = torch.exp(-hand_obj_offset_reward_scale * hand_obj_offset_err)
     anchor_obj_offset_reward = torch.exp(-anchor_obj_offset_reward_scale * anchor_obj_offset_err)
-    hand_vel_reward = torch.exp(-hand_vel_reward_scale * hand_vel_err)
-    fingertip_vel_reward = torch.exp(-fingertip_vel_reward_scale * fingertip_vel_err)
     anchor_position_gate = torch.exp(-anchor_rotation_gate_scale * hand_pos_err)
     anchor_rotation_gate = torch.maximum(anchor_position_gate, proximity_gate)
     hand_rot_reward = anchor_rotation_gate * torch.exp(-hand_rot_reward_scale * hand_rot_err)
@@ -900,8 +877,6 @@ def compute_rewards(
         + pose_imitation_scale * hand_anchor_weight * hand_anchor_reward
         + object_relative_scale * hand_obj_offset_weight * hand_obj_offset_reward
         + object_relative_scale * anchor_obj_offset_weight * anchor_obj_offset_reward
-        + velocity_imitation_scale * hand_vel_weight * hand_vel_reward
-        + velocity_imitation_scale * fingertip_vel_weight * fingertip_vel_reward
         + late_contact_reward_gate * pose_imitation_scale * hand_weight * hand_reward
         + late_contact_reward_gate * anchor_object_gate * hand_rot_weight * hand_rot_reward
         + late_contact_reward_gate * pose_imitation_scale * fingertip_weight * fingertip_reward
@@ -925,8 +900,6 @@ def compute_rewards(
         "reward/hand_anchor": hand_anchor_reward,
         "reward/hand_obj_offset": hand_obj_offset_reward,
         "reward/anchor_obj_offset": anchor_obj_offset_reward,
-        "reward/hand_vel": hand_vel_reward,
-        "reward/fingertip_vel": fingertip_vel_reward,
         "reward/hand_rot": hand_rot_reward,
         "reward/fingertip": fingertip_reward,
         "reward/fingertip_obj_proximity": fingertip_obj_proximity_reward,
@@ -946,7 +919,6 @@ def compute_rewards(
         "metric/mid_curriculum": mid_curriculum,
         "metric/position_imitation_scale": position_imitation_scale,
         "metric/pose_imitation_scale": pose_imitation_scale,
-        "metric/velocity_imitation_scale": velocity_imitation_scale,
         "metric/object_relative_scale": object_relative_scale,
         "metric/task_scale": task_scale,
         "metric/anchor_position_gate": anchor_position_gate,
@@ -963,8 +935,6 @@ def compute_rewards(
         "error/hand_anchor": hand_anchor_err,
         "error/hand_obj_offset": hand_obj_offset_err,
         "error/anchor_obj_offset": anchor_obj_offset_err,
-        "error/hand_vel": hand_vel_err,
-        "error/fingertip_vel": fingertip_vel_err,
         "error/hand_rot": hand_rot_err,
         "error/fingertip": fingertip_err,
         "error/fingertip_obj_proximity": fingertip_obj_proximity_err,
