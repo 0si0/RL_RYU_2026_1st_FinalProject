@@ -194,7 +194,15 @@ class GrEnv(DirectRLEnv):
         seq_len = self.obj_pos_seq.shape[0]
         self.mano_anchor_center_seq = self.mano_kpts_pos_seq[:, self.cfg.MANO_anchors].mean(dim=1)
 
-        self.hand_dof_seq = torch.zeros((seq_len, self.num_hand_dof), device=self.device)
+        dof_lower_limits = self.hand_dof_lower_limits[0] if self.hand_dof_lower_limits.ndim == 2 else self.hand_dof_lower_limits
+        dof_upper_limits = self.hand_dof_upper_limits[0] if self.hand_dof_upper_limits.ndim == 2 else self.hand_dof_upper_limits
+        self.hand_dof_seq = build_mano_to_shadow_dof_seq(
+            self.mano_kpts_pos_seq,
+            self.num_hand_dof,
+            self.actuated_dof_indices,
+            dof_lower_limits,
+            dof_upper_limits,
+        )
         self.hand_dof_pos_reset[:] = self.hand_dof_seq[0]
         self.hand_rot_reset[:] = self.inputs['R_init'].to(self.device)
         self.hand_pos_reset[:] = (self.inputs['t_init']).to(self.device) + to_center_pos[0]
@@ -352,6 +360,7 @@ class GrEnv(DirectRLEnv):
             self.hand_anchor_err,
             self.hand_obj_offset_err,
             self.anchor_obj_offset_err,
+            self.hand_dof_err,
             self.hand_rot_err,
             self.fingertip_err,
             self.fingertip_obj_proximity_err,
@@ -375,6 +384,7 @@ class GrEnv(DirectRLEnv):
             self.cfg.hand_anchor_reward_weight,
             self.cfg.hand_obj_offset_reward_weight,
             self.cfg.anchor_obj_offset_reward_weight,
+            self.cfg.hand_dof_reward_weight,
             self.cfg.hand_rot_reward_weight,
             self.cfg.fingertip_reward_weight,
             self.cfg.fingertip_obj_proximity_reward_weight,
@@ -389,6 +399,7 @@ class GrEnv(DirectRLEnv):
             self.cfg.hand_anchor_reward_scale,
             self.cfg.hand_obj_offset_reward_scale,
             self.cfg.anchor_obj_offset_reward_scale,
+            self.cfg.hand_dof_reward_scale,
             self.cfg.hand_rot_reward_scale,
             self.cfg.anchor_rotation_gate_scale,
             self.cfg.fingertip_reward_scale,
@@ -525,6 +536,7 @@ class GrEnv(DirectRLEnv):
 
         self.fingertip_pos_ref = self.fingertip_pos_seq[t]
         self.mano_kpts_pos_ref = self.mano_kpts_pos_seq[t]
+        self.hand_dof_ref = self.hand_dof_seq[t]
         self.obj_fingertip_pos_ref_offset = self.obj_fingertip_pos_seq_offset[t]
         hand_anchor_delta = self.mano_anchor_center_seq[t] - self.mano_anchor_center_seq[0]
         self.hand_pos_ref = self.hand_pos_reset_base + hand_anchor_delta
@@ -608,6 +620,7 @@ class GrEnv(DirectRLEnv):
         self.hand_kpt_err = torch.norm(self.hand_kpt_error, p=2, dim=-1).mean(dim=-1)
         self.hand_pos_err = torch.norm(self.hand_pos - self.hand_pos_ref, p=2, dim=-1)
         self.hand_anchor_err = torch.norm(self.hand_anchor_error, p=2, dim=-1).mean(dim=-1)
+        self.hand_dof_err = torch.abs(self.hand_dof_pos - self.hand_dof_ref).mean(dim=-1)
         self.fingertip_err = torch.norm(self.fingertip_error, p=2, dim=-1).mean(dim=-1)
         self.hand_obj_offset_err = torch.norm(
             (self.hand_pos - self.obj_pos) - self.hand_obj_ref_offset,
@@ -752,6 +765,7 @@ def compute_rewards(
     hand_anchor_err: torch.Tensor,
     hand_obj_offset_err: torch.Tensor,
     anchor_obj_offset_err: torch.Tensor,
+    hand_dof_err: torch.Tensor,
     hand_rot_err: torch.Tensor,
     fingertip_err: torch.Tensor,
     fingertip_obj_proximity_err: torch.Tensor,
@@ -775,6 +789,7 @@ def compute_rewards(
     hand_anchor_weight: float,
     hand_obj_offset_weight: float,
     anchor_obj_offset_weight: float,
+    hand_dof_weight: float,
     hand_rot_weight: float,
     fingertip_weight: float,
     fingertip_obj_proximity_weight: float,
@@ -789,6 +804,7 @@ def compute_rewards(
     hand_anchor_reward_scale: float,
     hand_obj_offset_reward_scale: float,
     anchor_obj_offset_reward_scale: float,
+    hand_dof_reward_scale: float,
     hand_rot_reward_scale: float,
     anchor_rotation_gate_scale: float,
     fingertip_reward_scale: float,
@@ -838,6 +854,7 @@ def compute_rewards(
     hand_anchor_reward = torch.exp(-hand_anchor_reward_scale * hand_anchor_err)
     hand_obj_offset_reward = torch.exp(-hand_obj_offset_reward_scale * hand_obj_offset_err)
     anchor_obj_offset_reward = torch.exp(-anchor_obj_offset_reward_scale * anchor_obj_offset_err)
+    hand_dof_reward = torch.exp(-hand_dof_reward_scale * hand_dof_err)
     anchor_position_gate = torch.exp(-anchor_rotation_gate_scale * hand_pos_err)
     anchor_rotation_gate = torch.maximum(anchor_position_gate, proximity_gate)
     hand_rot_reward = anchor_rotation_gate * torch.exp(-hand_rot_reward_scale * hand_rot_err)
@@ -877,6 +894,7 @@ def compute_rewards(
         + pose_imitation_scale * hand_anchor_weight * hand_anchor_reward
         + object_relative_scale * hand_obj_offset_weight * hand_obj_offset_reward
         + object_relative_scale * anchor_obj_offset_weight * anchor_obj_offset_reward
+        + pose_imitation_scale * hand_dof_weight * hand_dof_reward
         + late_contact_reward_gate * pose_imitation_scale * hand_weight * hand_reward
         + late_contact_reward_gate * anchor_object_gate * hand_rot_weight * hand_rot_reward
         + late_contact_reward_gate * pose_imitation_scale * fingertip_weight * fingertip_reward
@@ -900,6 +918,7 @@ def compute_rewards(
         "reward/hand_anchor": hand_anchor_reward,
         "reward/hand_obj_offset": hand_obj_offset_reward,
         "reward/anchor_obj_offset": anchor_obj_offset_reward,
+        "reward/hand_dof": hand_dof_reward,
         "reward/hand_rot": hand_rot_reward,
         "reward/fingertip": fingertip_reward,
         "reward/fingertip_obj_proximity": fingertip_obj_proximity_reward,
@@ -935,6 +954,7 @@ def compute_rewards(
         "error/hand_anchor": hand_anchor_err,
         "error/hand_obj_offset": hand_obj_offset_err,
         "error/anchor_obj_offset": anchor_obj_offset_err,
+        "error/hand_dof": hand_dof_err,
         "error/hand_rot": hand_rot_err,
         "error/fingertip": fingertip_err,
         "error/fingertip_obj_proximity": fingertip_obj_proximity_err,
@@ -953,6 +973,83 @@ def compute_rewards(
 
 
 # Utils
+def build_mano_to_shadow_dof_seq(
+    mano_kpts_pos_seq: torch.Tensor,
+    num_hand_dof: int,
+    actuated_dof_indices: list[int],
+    dof_lower_limits: torch.Tensor,
+    dof_upper_limits: torch.Tensor,
+) -> torch.Tensor:
+    seq_len = mano_kpts_pos_seq.shape[0]
+    dof_seq = torch.zeros((seq_len, num_hand_dof), device=mano_kpts_pos_seq.device)
+
+    # MANO chains: thumb, index, middle, ring, little.
+    thumb = mano_kpts_pos_seq[:, [0, 1, 2, 3, 4]]
+    index = mano_kpts_pos_seq[:, [0, 5, 6, 7, 8]]
+    middle = mano_kpts_pos_seq[:, [0, 9, 10, 11, 12]]
+    ring = mano_kpts_pos_seq[:, [0, 13, 14, 15, 16]]
+    little = mano_kpts_pos_seq[:, [0, 17, 18, 19, 20]]
+
+    def chain_bends(chain: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        bend0 = joint_bend_norm(chain[:, 0], chain[:, 1], chain[:, 2])
+        bend1 = joint_bend_norm(chain[:, 1], chain[:, 2], chain[:, 3])
+        bend2 = joint_bend_norm(chain[:, 2], chain[:, 3], chain[:, 4])
+        return bend0, bend1, bend2
+
+    index_bends = chain_bends(index)
+    middle_bends = chain_bends(middle)
+    ring_bends = chain_bends(ring)
+    little_bends = chain_bends(little)
+    thumb_bends = chain_bends(thumb)
+
+    zero = torch.zeros(seq_len, device=mano_kpts_pos_seq.device)
+    actuated_norm = (
+        zero,
+        index_bends[0],
+        0.5 * (index_bends[1] + index_bends[2]),
+        zero,
+        middle_bends[0],
+        0.5 * (middle_bends[1] + middle_bends[2]),
+        zero,
+        ring_bends[0],
+        0.5 * (ring_bends[1] + ring_bends[2]),
+        zero,
+        zero,
+        little_bends[0],
+        0.5 * (little_bends[1] + little_bends[2]),
+        zero,
+        thumb_bends[0],
+        zero,
+        thumb_bends[1],
+        thumb_bends[2],
+    )
+
+    for value, dof_id in zip(actuated_norm, actuated_dof_indices):
+        dof_seq[:, dof_id] = flexion_target(value, dof_lower_limits[dof_id], dof_upper_limits[dof_id])
+
+    return dof_seq
+
+
+def joint_bend_norm(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+    prev_bone = F.normalize(a - b, dim=-1)
+    next_bone = F.normalize(c - b, dim=-1)
+    cos_angle = torch.clamp((prev_bone * next_bone).sum(dim=-1), -1.0, 1.0)
+    bend = torch.pi - torch.acos(cos_angle)
+    return torch.clamp(bend / (0.5 * torch.pi), 0.0, 1.0)
+
+
+def flexion_target(norm_value: torch.Tensor, lower: torch.Tensor, upper: torch.Tensor) -> torch.Tensor:
+    lower_value = lower.item()
+    upper_value = upper.item()
+    if upper_value <= 0.0 and lower_value < 0.0:
+        target = norm_value * lower
+    elif lower_value < 0.0 < upper_value:
+        target = norm_value * upper
+    else:
+        target = lower + norm_value * (upper - lower)
+    return torch.minimum(torch.maximum(target, lower), upper)
+
+
 def build_anchor_rot_ref_seq(mano_kpts_pos_seq: torch.Tensor, hand_rot_reset: torch.Tensor) -> torch.Tensor:
     wrist = mano_kpts_pos_seq[:, 0]
     index_base = mano_kpts_pos_seq[:, 5]
