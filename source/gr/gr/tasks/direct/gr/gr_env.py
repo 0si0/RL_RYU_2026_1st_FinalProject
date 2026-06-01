@@ -711,7 +711,18 @@ class GrEnv(DirectRLEnv):
 
         self.hand_far_apart = self.hand_kpt_err > self.cfg.hand_terminate_threshold
         self.obj_far_apart = self.obj_pos_err > self.cfg.obj_terminate_threshold
-        self.early_terminate = torch.logical_or(self.hand_far_apart, self.obj_far_apart)
+        self.obj_rot_far_apart = torch.logical_and(
+            self.episode_length_buf > self.cfg.obj_rot_terminate_after_steps,
+            self.obj_rot_err > self.cfg.obj_rot_terminate_threshold,
+        )
+        self.no_grasp_failure = torch.logical_and(
+            self.episode_length_buf > self.cfg.no_grasp_terminate_after_steps,
+            self.no_contact_duration > self.cfg.no_grasp_terminate_grace_steps,
+        )
+        self.early_terminate = torch.logical_or(
+            torch.logical_or(self.hand_far_apart, self.obj_far_apart),
+            torch.logical_or(self.obj_rot_far_apart, self.no_grasp_failure),
+        )
 
         if not self.play:
             # Point visualization for debugging; you may change which points are shown.

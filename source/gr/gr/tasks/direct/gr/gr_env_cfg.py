@@ -271,6 +271,10 @@ class GrEnvCfg(DirectRLEnvCfg):
 
     hand_terminate_threshold = 0.35
     obj_terminate_threshold = 0.35
+    obj_rot_terminate_threshold = 1.0
+    obj_rot_terminate_after_steps = 80.0
+    no_grasp_terminate_after_steps = 110.0
+    no_grasp_terminate_grace_steps = 70.0
 
     act_moving_average = 0.5
     global_moving_average = 0.4
