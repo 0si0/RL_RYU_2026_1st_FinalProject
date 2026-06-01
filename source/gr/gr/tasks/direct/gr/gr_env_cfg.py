@@ -211,7 +211,7 @@ class GrEnvCfg(DirectRLEnvCfg):
 
     action_dt = 1 / action_fps
     
-    action_penalty_scale = -0.004
+    action_penalty_scale = -0.002
     dof_penalty_scale = -0.001
 
     hand_reward_weight = 1.0
@@ -219,6 +219,8 @@ class GrEnvCfg(DirectRLEnvCfg):
     hand_anchor_reward_weight = 0.8
     hand_obj_offset_reward_weight = 0.6
     anchor_obj_offset_reward_weight = 0.8
+    hand_vel_reward_weight = 0.2
+    fingertip_vel_reward_weight = 0.2
     hand_rot_reward_weight = 0.2
     fingertip_reward_weight = 0.5
     fingertip_obj_proximity_reward_weight = 0.6
@@ -233,6 +235,8 @@ class GrEnvCfg(DirectRLEnvCfg):
     hand_anchor_reward_scale = 15.0
     hand_obj_offset_reward_scale = 12.0
     anchor_obj_offset_reward_scale = 15.0
+    hand_vel_reward_scale = 2.0
+    fingertip_vel_reward_scale = 2.0
     hand_rot_reward_scale = 2.0
     anchor_rotation_gate_scale = 20.0
     fingertip_reward_scale = 40.0
@@ -268,7 +272,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     obj_terminate_threshold = 0.35
 
     act_moving_average = 0.5
-    global_moving_average = 0.2
+    global_moving_average = 0.4
 
     adaptive_uniform_ratio = 0.1
     adaptive_alpha = 0.001
