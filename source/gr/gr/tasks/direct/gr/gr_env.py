@@ -846,7 +846,7 @@ def compute_rewards(
         + 0.3 * obj_pos_reward
         + 0.3 * fingertip_obj_offset_reward
     )
-    good_transport_gate = torch.clamp(soft_grasp_gate * contact_sustain_reward, 0.0, 1.0)
+    good_transport_gate = torch.clamp(contact_gate * contact_sustain_reward, 0.0, 1.0)
     motion_error_penalty = torch.clamp(
         (obj_vel_err - hit_motion_tolerance) / (hit_motion_scale + 1.0e-6),
         0.0,
@@ -869,7 +869,8 @@ def compute_rewards(
         1.0,
     )
     hit_without_grasp_penalty = (1.0 - good_transport_gate) * motion_error_penalty
-    task_failure_penalty = role_curriculum * (
+    failure_curriculum = role_curriculum * role_curriculum
+    task_failure_penalty = failure_curriculum * (
         hit_without_grasp_penalty_weight * hit_without_grasp_penalty
         + topple_penalty_weight * (1.0 - good_transport_gate) * topple_penalty
         + object_lost_penalty_weight * object_lost_penalty
@@ -888,7 +889,7 @@ def compute_rewards(
         + object_gate * obj_rot_weight * obj_rot_reward
         + object_gate * obj_vel_weight * obj_vel_reward
         + lift_curriculum_scale * lift_support_reward_weight * lift_support_reward
-        + contact_curriculum_scale * thumb_proximity_reward_weight * proximity_gate * thumb_proximity_reward
+        + role_curriculum * thumb_proximity_reward_weight * proximity_gate * thumb_proximity_reward
         + role_curriculum * finger_role_reward_weight * finger_role_reward
         + role_curriculum * opposition_reward_weight * opposition_reward
         + action_penalty_scale * action_penalty
@@ -934,6 +935,7 @@ def compute_rewards(
         "metric/good_transport_gate": good_transport_gate,
         "metric/lift_gate": lift_gate,
         "metric/finger_role_curriculum": role_curriculum,
+        "metric/failure_curriculum": failure_curriculum,
         "metric/anchor_curriculum_scale": anchor_curriculum_scale,
         "metric/contact_curriculum_scale": contact_curriculum_scale,
         "metric/lift_curriculum_scale": lift_curriculum_scale,
