@@ -384,7 +384,9 @@ class GrEnv(DirectRLEnv):
             self.cfg.contact_sustain_reward_weight,
             self.cfg.lift_support_reward_weight,
             self.cfg.early_imitation_reward_bonus,
+            self.cfg.mid_object_relative_reward_bonus,
             self.cfg.late_task_reward_bonus,
+            self.cfg.anchor_object_gate_floor,
             self.cfg.no_contact_late_reward_floor,
             self.cfg.no_grasp_rotation_penalty_weight,
             self.cfg.target_contact_fingers,
@@ -755,7 +757,9 @@ def compute_rewards(
     contact_sustain_reward_weight: float,
     lift_support_reward_weight: float,
     early_imitation_reward_bonus: float,
+    mid_object_relative_reward_bonus: float,
     late_task_reward_bonus: float,
+    anchor_object_gate_floor: float,
     no_contact_late_reward_floor: float,
     no_grasp_rotation_penalty_weight: float,
     target_contact_fingers: float,
@@ -770,10 +774,15 @@ def compute_rewards(
     obj_angvel_err = torch.norm(obj_angvel_error, p=2, dim=-1)
     obj_vel_err = obj_linvel_err + obj_angvel_reward_scale * obj_angvel_err
     early_curriculum = 1.0 - curriculum_progress
+    mid_curriculum = 1.0 - torch.abs(2.0 * curriculum_progress - 1.0)
     imitation_scale = 1.0 + early_imitation_reward_bonus * early_curriculum
+    object_relative_scale = 1.0 + mid_object_relative_reward_bonus * mid_curriculum
     task_scale = 1.0 + late_task_reward_bonus * curriculum_progress
     late_no_contact = curriculum_progress * no_contact_sustain
     late_contact_reward_gate = 1.0 - (1.0 - no_contact_late_reward_floor) * late_no_contact
+    anchor_object_gate = anchor_object_gate_floor + (1.0 - anchor_object_gate_floor) * (
+        (1.0 - curriculum_progress) + curriculum_progress * proximity_gate
+    )
 
     hand_reward = torch.exp(-hand_reward_scale * hand_kpt_err)
     hand_anchor_reward = torch.exp(-hand_anchor_reward_scale * hand_anchor_err)
@@ -807,11 +816,11 @@ def compute_rewards(
 
     reward = (
         late_contact_reward_gate * imitation_scale * hand_weight * hand_reward
-        + late_contact_reward_gate * imitation_scale * hand_anchor_weight * hand_anchor_reward
-        + late_contact_reward_gate * imitation_scale * hand_rot_weight * hand_rot_reward
+        + late_contact_reward_gate * anchor_object_gate * imitation_scale * hand_anchor_weight * hand_anchor_reward
+        + late_contact_reward_gate * anchor_object_gate * imitation_scale * hand_rot_weight * hand_rot_reward
         + late_contact_reward_gate * imitation_scale * fingertip_weight * fingertip_reward
         + fingertip_obj_proximity_weight * fingertip_obj_proximity_reward
-        + fingertip_obj_offset_weight * fingertip_obj_offset_reward
+        + object_relative_scale * fingertip_obj_offset_weight * fingertip_obj_offset_reward
         + task_scale * contact_weight * contact_reward
         + object_gate * obj_pos_weight * obj_pos_reward
         + object_gate * obj_rot_weight * obj_rot_reward
@@ -843,9 +852,12 @@ def compute_rewards(
         "metric/proximity_gate": proximity_gate,
         "metric/object_gate": object_gate,
         "metric/curriculum_progress": curriculum_progress,
+        "metric/mid_curriculum": mid_curriculum,
         "metric/imitation_scale": imitation_scale,
+        "metric/object_relative_scale": object_relative_scale,
         "metric/task_scale": task_scale,
         "metric/anchor_rotation_gate": anchor_rotation_gate,
+        "metric/anchor_object_gate": anchor_object_gate,
         "metric/late_contact_reward_gate": late_contact_reward_gate,
         "metric/no_contact_sustain": no_contact_sustain,
         "metric/contact_fingers": num_contact_fingers,

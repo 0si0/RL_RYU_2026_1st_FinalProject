@@ -239,8 +239,10 @@ class GrEnvCfg(DirectRLEnvCfg):
     contact_sustain_reward_weight = 0.4
     lift_support_reward_weight = 0.8
     early_imitation_reward_bonus = 1.0
+    mid_object_relative_reward_bonus = 1.0
     late_task_reward_bonus = 1.0
     reward_curriculum_steps = 18000
+    anchor_object_gate_floor = 0.35
     no_contact_grace_steps = 60.0
     no_contact_late_reward_floor = 0.05
     no_grasp_rotation_penalty_weight = 0.10
