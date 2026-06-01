@@ -322,19 +322,11 @@ class GrEnv(DirectRLEnv):
 
 
     def _get_rewards(self) -> torch.Tensor:
-        role_curriculum = torch.full(
+        curriculum_progress = torch.full(
             (self.num_envs,),
             float(
                 np.clip(
-                    (
-                        getattr(self, "common_step_counter", 0)
-                        - self.cfg.finger_role_curriculum_start_step
-                    )
-                    / max(
-                        1,
-                        self.cfg.finger_role_curriculum_end_step
-                        - self.cfg.finger_role_curriculum_start_step,
-                    ),
+                    getattr(self, "common_step_counter", 0) / max(1, self.cfg.reward_curriculum_steps),
                     0.0,
                     1.0,
                 )
@@ -349,6 +341,7 @@ class GrEnv(DirectRLEnv):
             self.actions,
             self.hand_kpt_err,
             self.hand_anchor_err,
+            self.hand_rot_err,
             self.fingertip_err,
             self.fingertip_obj_proximity_err,
             self.fingertip_obj_topk_proximity_err,
@@ -357,12 +350,6 @@ class GrEnv(DirectRLEnv):
             self.projected_contact_force,
             self.max_contact_force,
             self.num_contact_fingers,
-            self.thumb_contact,
-            self.non_thumb_contact_fingers,
-            self.thumb_proximity_err,
-            self.non_thumb_topk_proximity_err,
-            self.opposition,
-            role_curriculum,
             self.proximity_gate,
             self.contact_sustain,
             self.object_lift,
@@ -370,8 +357,10 @@ class GrEnv(DirectRLEnv):
             self.obj_rot_err,
             self.obj_linvel_error,
             self.obj_angvel_error,
+            curriculum_progress,
             self.cfg.hand_reward_weight,
             self.cfg.hand_anchor_reward_weight,
+            self.cfg.hand_rot_reward_weight,
             self.cfg.fingertip_reward_weight,
             self.cfg.fingertip_obj_proximity_reward_weight,
             self.cfg.fingertip_obj_offset_reward_weight,
@@ -382,6 +371,8 @@ class GrEnv(DirectRLEnv):
             self.cfg.action_penalty_scale,
             self.cfg.hand_reward_scale,
             self.cfg.hand_anchor_reward_scale,
+            self.cfg.hand_rot_reward_scale,
+            self.cfg.anchor_rotation_gate_scale,
             self.cfg.fingertip_reward_scale,
             self.cfg.fingertip_obj_proximity_reward_scale,
             self.cfg.fingertip_obj_offset_reward_scale,
@@ -390,25 +381,10 @@ class GrEnv(DirectRLEnv):
             self.cfg.contact_count_reward_weight,
             self.cfg.contact_sustain_reward_weight,
             self.cfg.lift_support_reward_weight,
-            self.cfg.thumb_proximity_reward_weight,
-            self.cfg.finger_role_reward_weight,
-            self.cfg.opposition_reward_weight,
-            self.cfg.early_anchor_reward_bonus,
-            self.cfg.contact_curriculum_min,
-            self.cfg.lift_curriculum_min,
-            self.cfg.hit_without_grasp_penalty_weight,
-            self.cfg.topple_penalty_weight,
-            self.cfg.object_lost_penalty_weight,
-            self.cfg.hit_motion_tolerance,
-            self.cfg.hit_motion_scale,
-            self.cfg.topple_rot_threshold,
-            self.cfg.topple_pos_threshold,
-            self.cfg.object_lost_distance,
-            self.cfg.object_lost_distance_scale,
+            self.cfg.early_imitation_reward_bonus,
+            self.cfg.late_task_reward_bonus,
             self.cfg.target_contact_fingers,
-            self.cfg.target_non_thumb_contact_fingers,
             self.cfg.contact_reward_max_force,
-            self.cfg.lift_contact_gate_floor,
             self.cfg.obj_pos_reward_scale,
             self.cfg.obj_rot_reward_scale,
             self.cfg.obj_vel_reward_scale,
@@ -603,6 +579,11 @@ class GrEnv(DirectRLEnv):
         self.hand_anchor_err = torch.norm(self.hand_anchor_error, p=2, dim=-1).mean(dim=-1)
         self.fingertip_err = torch.norm(self.fingertip_error, p=2, dim=-1).mean(dim=-1)
 
+        self.hand_rot_error_quat = quat_mul(self.hand_rot, quat_conjugate(self.hand_rot_ref))
+        hand_rot_vec_norm = torch.norm(self.hand_rot_error_quat[:, 1:4], p=2, dim=-1)
+        hand_rot_w = torch.abs(self.hand_rot_error_quat[:, 0])
+        self.hand_rot_err = 2.0 * torch.atan2(hand_rot_vec_norm, hand_rot_w)
+
         self.obj_pos_error = self.obj_pos - self.obj_pos_ref
         self.obj_pos_err = torch.norm(self.obj_pos_error, p=2, dim=-1)
 
@@ -632,21 +613,6 @@ class GrEnv(DirectRLEnv):
         self.contact_active = (self.fingertip_contact_force_norm > self.cfg.contact_force_threshold).float()
         self.fingertip_contact_forces_buf[:, 2] = self.contact_active
         self.num_contact_fingers = self.contact_active.sum(dim=-1)
-        self.thumb_contact = self.contact_active[:, 0]
-        self.non_thumb_contact_fingers = self.contact_active[:, 1:].sum(dim=-1)
-        self.thumb_proximity_err = self.fingertip_obj_dist[:, 0]
-        non_thumb_topk_count = min(self.cfg.non_thumb_topk_fingers, self.num_fingertips - 1)
-        self.non_thumb_topk_proximity_err = torch.topk(
-            self.fingertip_obj_dist[:, 1:],
-            k=non_thumb_topk_count,
-            dim=-1,
-            largest=False,
-        ).values.mean(dim=-1)
-        thumb_vec = F.normalize(self.fingertip_to_obj[:, 0], dim=-1)
-        non_thumb_weights = self.contact_active[:, 1:] + torch.exp(-self.cfg.proximity_gate_scale * self.fingertip_obj_dist[:, 1:])
-        non_thumb_weights = non_thumb_weights / (non_thumb_weights.sum(dim=-1, keepdim=True) + 1.0e-6)
-        non_thumb_vec = F.normalize((self.fingertip_to_obj[:, 1:] * non_thumb_weights.unsqueeze(-1)).sum(dim=1), dim=-1)
-        self.opposition = torch.clamp((-(thumb_vec * non_thumb_vec).sum(dim=-1) + 1.0) * 0.5, 0.0, 1.0)
         self.contact_duration = torch.where(
             self.num_contact_fingers > 0,
             self.contact_duration + 1.0,
@@ -732,6 +698,7 @@ def compute_rewards(
     actions: torch.Tensor,
     hand_kpt_err: torch.Tensor,
     hand_anchor_err: torch.Tensor,
+    hand_rot_err: torch.Tensor,
     fingertip_err: torch.Tensor,
     fingertip_obj_proximity_err: torch.Tensor,
     fingertip_obj_topk_proximity_err: torch.Tensor,
@@ -740,12 +707,6 @@ def compute_rewards(
     projected_contact_force: torch.Tensor,
     max_contact_force: torch.Tensor,
     num_contact_fingers: torch.Tensor,
-    thumb_contact: torch.Tensor,
-    non_thumb_contact_fingers: torch.Tensor,
-    thumb_proximity_err: torch.Tensor,
-    non_thumb_topk_proximity_err: torch.Tensor,
-    opposition: torch.Tensor,
-    role_curriculum: torch.Tensor,
     proximity_gate: torch.Tensor,
     contact_sustain: torch.Tensor,
     object_lift: torch.Tensor,
@@ -753,8 +714,10 @@ def compute_rewards(
     obj_rot_err: torch.Tensor,
     obj_linvel_error: torch.Tensor,
     obj_angvel_error: torch.Tensor,
+    curriculum_progress: torch.Tensor,
     hand_weight: float,
     hand_anchor_weight: float,
+    hand_rot_weight: float,
     fingertip_weight: float,
     fingertip_obj_proximity_weight: float,
     fingertip_obj_offset_weight: float,
@@ -765,6 +728,8 @@ def compute_rewards(
     action_penalty_scale: float,
     hand_reward_scale: float,
     hand_anchor_reward_scale: float,
+    hand_rot_reward_scale: float,
+    anchor_rotation_gate_scale: float,
     fingertip_reward_scale: float,
     fingertip_obj_proximity_reward_scale: float,
     fingertip_obj_offset_reward_scale: float,
@@ -773,25 +738,10 @@ def compute_rewards(
     contact_count_reward_weight: float,
     contact_sustain_reward_weight: float,
     lift_support_reward_weight: float,
-    thumb_proximity_reward_weight: float,
-    finger_role_reward_weight: float,
-    opposition_reward_weight: float,
-    early_anchor_reward_bonus: float,
-    contact_curriculum_min: float,
-    lift_curriculum_min: float,
-    hit_without_grasp_penalty_weight: float,
-    topple_penalty_weight: float,
-    object_lost_penalty_weight: float,
-    hit_motion_tolerance: float,
-    hit_motion_scale: float,
-    topple_rot_threshold: float,
-    topple_pos_threshold: float,
-    object_lost_distance: float,
-    object_lost_distance_scale: float,
+    early_imitation_reward_bonus: float,
+    late_task_reward_bonus: float,
     target_contact_fingers: float,
-    target_non_thumb_contact_fingers: float,
     contact_reward_max_force: float,
-    lift_contact_gate_floor: float,
     obj_pos_reward_scale: float,
     obj_rot_reward_scale: float,
     obj_vel_reward_scale: float,
@@ -801,36 +751,20 @@ def compute_rewards(
     obj_linvel_err = torch.norm(obj_linvel_error, p=2, dim=-1)
     obj_angvel_err = torch.norm(obj_angvel_error, p=2, dim=-1)
     obj_vel_err = obj_linvel_err + obj_angvel_reward_scale * obj_angvel_err
-    early_curriculum = 1.0 - role_curriculum
-    anchor_curriculum_scale = 1.0 + early_anchor_reward_bonus * early_curriculum
-    contact_curriculum_scale = contact_curriculum_min + (1.0 - contact_curriculum_min) * role_curriculum
-    lift_curriculum_scale = lift_curriculum_min + (1.0 - lift_curriculum_min) * role_curriculum
+    early_curriculum = 1.0 - curriculum_progress
+    imitation_scale = 1.0 + early_imitation_reward_bonus * early_curriculum
+    task_scale = 1.0 + late_task_reward_bonus * curriculum_progress
 
     hand_reward = torch.exp(-hand_reward_scale * hand_kpt_err)
     hand_anchor_reward = torch.exp(-hand_anchor_reward_scale * hand_anchor_err)
+    anchor_rotation_gate = torch.exp(-anchor_rotation_gate_scale * hand_anchor_err)
+    hand_rot_reward = anchor_rotation_gate * torch.exp(-hand_rot_reward_scale * hand_rot_err)
     fingertip_reward = torch.exp(-fingertip_reward_scale * fingertip_err)
     fingertip_obj_proximity_reward = torch.exp(-fingertip_obj_proximity_reward_scale * fingertip_obj_topk_proximity_err)
     fingertip_obj_offset_reward = torch.exp(-fingertip_obj_offset_reward_scale * fingertip_obj_offset_err)
     contact_force_reward = torch.clamp(contact_force, 0.0, contact_reward_max_force) / (contact_reward_max_force + 1.0e-6)
     contact_count_reward = torch.clamp(num_contact_fingers / (target_contact_fingers + 1.0e-6), 0.0, 1.0)
     contact_sustain_reward = torch.clamp(contact_sustain, 0.0, 1.0)
-    thumb_proximity_reward = torch.exp(-fingertip_obj_proximity_reward_scale * thumb_proximity_err)
-    non_thumb_proximity_reward = torch.exp(-fingertip_obj_proximity_reward_scale * non_thumb_topk_proximity_err)
-    non_thumb_contact_reward = torch.clamp(
-        non_thumb_contact_fingers / (target_non_thumb_contact_fingers + 1.0e-6),
-        0.0,
-        1.0,
-    )
-    grasp_role_gate = thumb_contact * non_thumb_contact_reward
-    contact_gate = torch.clamp(num_contact_fingers / (target_contact_fingers + 1.0e-6), 0.0, 1.0)
-    soft_grasp_gate = lift_contact_gate_floor * contact_gate + (1.0 - lift_contact_gate_floor) * grasp_role_gate
-    lift_gate = (1.0 - role_curriculum) * contact_gate + role_curriculum * soft_grasp_gate
-    finger_role_reward = proximity_gate * (
-        0.35 * thumb_proximity_reward
-        + 0.20 * non_thumb_proximity_reward
-        + 0.45 * grasp_role_gate
-    )
-    opposition_reward = opposition * thumb_proximity_reward * non_thumb_proximity_reward * (0.25 + 0.75 * grasp_role_gate)
     contact_reward = proximity_gate * (
         contact_force_reward_weight * contact_force_reward
         + contact_count_reward_weight * contact_count_reward
@@ -840,60 +774,29 @@ def compute_rewards(
     obj_rot_reward = torch.exp(-obj_rot_reward_scale * obj_rot_err)
     obj_vel_reward = torch.exp(-obj_vel_reward_scale * obj_vel_err)
     object_gate = object_reward_gate_base + (1.0 - object_reward_gate_base) * proximity_gate
+    contact_gate = torch.clamp(num_contact_fingers / (target_contact_fingers + 1.0e-6), 0.0, 1.0)
     lift_reward = torch.clamp(object_lift, 0.0, 1.0)
-    lift_support_reward = lift_gate * contact_sustain_reward * (
+    lift_support_reward = contact_gate * contact_sustain_reward * (
         0.4 * lift_reward
         + 0.3 * obj_pos_reward
         + 0.3 * fingertip_obj_offset_reward
-    )
-    good_transport_gate = torch.clamp(contact_gate * contact_sustain_reward, 0.0, 1.0)
-    motion_error_penalty = torch.clamp(
-        (obj_vel_err - hit_motion_tolerance) / (hit_motion_scale + 1.0e-6),
-        0.0,
-        1.0,
-    )
-    topple_rot_penalty = torch.clamp(
-        (obj_rot_err - topple_rot_threshold) / (3.14159 - topple_rot_threshold + 1.0e-6),
-        0.0,
-        1.0,
-    )
-    topple_pos_penalty = torch.clamp(
-        (obj_pos_err - topple_pos_threshold) / (topple_pos_threshold + 1.0e-6),
-        0.0,
-        1.0,
-    )
-    topple_penalty = torch.clamp(0.7 * topple_rot_penalty + 0.3 * topple_pos_penalty, 0.0, 1.0)
-    object_lost_penalty = (1.0 - contact_gate) * torch.clamp(
-        (fingertip_obj_topk_proximity_err - object_lost_distance) / (object_lost_distance_scale + 1.0e-6),
-        0.0,
-        1.0,
-    )
-    hit_without_grasp_penalty = (1.0 - good_transport_gate) * motion_error_penalty
-    failure_curriculum = role_curriculum * role_curriculum
-    task_failure_penalty = failure_curriculum * (
-        hit_without_grasp_penalty_weight * hit_without_grasp_penalty
-        + topple_penalty_weight * (1.0 - good_transport_gate) * topple_penalty
-        + object_lost_penalty_weight * object_lost_penalty
     )
 
     action_penalty = torch.sum(actions * actions, dim=-1)
 
     reward = (
-        hand_weight * hand_reward
-        + hand_anchor_weight * anchor_curriculum_scale * hand_anchor_reward
-        + fingertip_weight * fingertip_reward
+        imitation_scale * hand_weight * hand_reward
+        + imitation_scale * hand_anchor_weight * hand_anchor_reward
+        + imitation_scale * hand_rot_weight * hand_rot_reward
+        + imitation_scale * fingertip_weight * fingertip_reward
         + fingertip_obj_proximity_weight * fingertip_obj_proximity_reward
         + fingertip_obj_offset_weight * fingertip_obj_offset_reward
-        + contact_curriculum_scale * contact_weight * contact_reward
+        + task_scale * contact_weight * contact_reward
         + object_gate * obj_pos_weight * obj_pos_reward
         + object_gate * obj_rot_weight * obj_rot_reward
         + object_gate * obj_vel_weight * obj_vel_reward
-        + lift_curriculum_scale * lift_support_reward_weight * lift_support_reward
-        + role_curriculum * thumb_proximity_reward_weight * proximity_gate * thumb_proximity_reward
-        + role_curriculum * finger_role_reward_weight * finger_role_reward
-        + role_curriculum * opposition_reward_weight * opposition_reward
+        + task_scale * lift_support_reward_weight * lift_support_reward
         + action_penalty_scale * action_penalty
-        - task_failure_penalty
     )
 
     reward = torch.clamp_min(reward, 0.0)
@@ -902,6 +805,7 @@ def compute_rewards(
         "reward/total": reward,
         "reward/hand": hand_reward,
         "reward/hand_anchor": hand_anchor_reward,
+        "reward/hand_rot": hand_rot_reward,
         "reward/fingertip": fingertip_reward,
         "reward/fingertip_obj_proximity": fingertip_obj_proximity_reward,
         "reward/fingertip_obj_offset": fingertip_obj_offset_reward,
@@ -911,43 +815,24 @@ def compute_rewards(
         "reward/contact_sustain": contact_sustain_reward,
         "reward/lift_support": lift_support_reward,
         "reward/lift": lift_reward,
-        "reward/finger_role": finger_role_reward,
-        "reward/opposition": opposition_reward,
-        "reward/thumb_proximity": thumb_proximity_reward,
-        "reward/thumb_proximity_shaped": proximity_gate * thumb_proximity_reward,
-        "reward/non_thumb_proximity": non_thumb_proximity_reward,
-        "reward/non_thumb_contact": non_thumb_contact_reward,
         "reward/object_pos": obj_pos_reward,
         "reward/object_rot": obj_rot_reward,
         "reward/object_vel": obj_vel_reward,
-        "penalty/task_failure": task_failure_penalty,
-        "penalty/hit_without_grasp": hit_without_grasp_penalty,
-        "penalty/topple": topple_penalty,
-        "penalty/object_lost": object_lost_penalty,
         "metric/proximity_gate": proximity_gate,
         "metric/object_gate": object_gate,
+        "metric/curriculum_progress": curriculum_progress,
+        "metric/imitation_scale": imitation_scale,
+        "metric/task_scale": task_scale,
+        "metric/anchor_rotation_gate": anchor_rotation_gate,
         "metric/contact_fingers": num_contact_fingers,
         "metric/contact_sustain": contact_sustain_reward,
-        "metric/thumb_contact": thumb_contact,
-        "metric/non_thumb_contact_fingers": non_thumb_contact_fingers,
-        "metric/grasp_role_gate": grasp_role_gate,
-        "metric/soft_grasp_gate": soft_grasp_gate,
-        "metric/good_transport_gate": good_transport_gate,
-        "metric/lift_gate": lift_gate,
-        "metric/finger_role_curriculum": role_curriculum,
-        "metric/failure_curriculum": failure_curriculum,
-        "metric/anchor_curriculum_scale": anchor_curriculum_scale,
-        "metric/contact_curriculum_scale": contact_curriculum_scale,
-        "metric/lift_curriculum_scale": lift_curriculum_scale,
-        "metric/opposition": opposition,
         "penalty/action": action_penalty,
         "error/hand_kpt": hand_kpt_err,
         "error/hand_anchor": hand_anchor_err,
+        "error/hand_rot": hand_rot_err,
         "error/fingertip": fingertip_err,
         "error/fingertip_obj_proximity": fingertip_obj_proximity_err,
         "error/fingertip_obj_proximity_topk": fingertip_obj_topk_proximity_err,
-        "error/thumb_proximity": thumb_proximity_err,
-        "error/non_thumb_topk_proximity": non_thumb_topk_proximity_err,
         "error/fingertip_obj_offset": fingertip_obj_offset_err,
         "error/object_pos": obj_pos_err,
         "error/object_rot": obj_rot_err,
