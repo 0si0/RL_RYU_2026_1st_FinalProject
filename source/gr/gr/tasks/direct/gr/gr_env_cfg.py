@@ -221,7 +221,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     anchor_obj_offset_reward_weight = 0.8
     hand_rot_reward_weight = 0.2
     fingertip_reward_weight = 0.5
-    fingertip_obj_proximity_reward_weight = 0.3
+    fingertip_obj_proximity_reward_weight = 0.6
     fingertip_obj_offset_reward_weight = 0.8
     contact_reward_weight = 1.2
     obj_pos_reward_weight = 2.0

@@ -83,7 +83,7 @@ params:
     clip_value: True
 
     # Rollout, batch, and epoch settings
-    horizon_length: 16
+    horizon_length: 8
     minibatch_size: 1024
     mini_epochs: 5
 
