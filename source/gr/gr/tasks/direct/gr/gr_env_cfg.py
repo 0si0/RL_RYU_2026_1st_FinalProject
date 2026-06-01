@@ -247,6 +247,9 @@ class GrEnvCfg(DirectRLEnvCfg):
     contact_sustain_reward_weight = 0.4
     lift_support_reward_weight = 0.8
     early_imitation_reward_bonus = 1.0
+    early_episode_tracking_frames = 70.0
+    early_episode_tracking_bonus = 1.5
+    early_lag_penalty_weight = 2.0
     object_relative_reward_base = 0.35
     mid_object_relative_reward_bonus = 1.0
     late_task_reward_bonus = 1.0

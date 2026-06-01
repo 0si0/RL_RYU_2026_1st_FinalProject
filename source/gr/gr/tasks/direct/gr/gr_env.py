@@ -349,6 +349,11 @@ class GrEnv(DirectRLEnv):
             ),
             device=self.device,
         )
+        early_episode_gate = torch.clamp(
+            1.0 - self.episode_length_buf.float() / max(1.0, self.cfg.early_episode_tracking_frames),
+            0.0,
+            1.0,
+        )
         (
             total_reward,
             logs_dict,
@@ -379,6 +384,7 @@ class GrEnv(DirectRLEnv):
             self.obj_linvel_error,
             self.obj_angvel_error,
             curriculum_progress,
+            early_episode_gate,
             self.cfg.hand_reward_weight,
             self.cfg.hand_pos_reward_weight,
             self.cfg.hand_anchor_reward_weight,
@@ -411,6 +417,8 @@ class GrEnv(DirectRLEnv):
             self.cfg.contact_sustain_reward_weight,
             self.cfg.lift_support_reward_weight,
             self.cfg.early_imitation_reward_bonus,
+            self.cfg.early_episode_tracking_bonus,
+            self.cfg.early_lag_penalty_weight,
             self.cfg.object_relative_reward_base,
             self.cfg.mid_object_relative_reward_bonus,
             self.cfg.late_task_reward_bonus,
@@ -784,6 +792,7 @@ def compute_rewards(
     obj_linvel_error: torch.Tensor,
     obj_angvel_error: torch.Tensor,
     curriculum_progress: torch.Tensor,
+    early_episode_gate: torch.Tensor,
     hand_weight: float,
     hand_pos_weight: float,
     hand_anchor_weight: float,
@@ -816,6 +825,8 @@ def compute_rewards(
     contact_sustain_reward_weight: float,
     lift_support_reward_weight: float,
     early_imitation_reward_bonus: float,
+    early_episode_tracking_bonus: float,
+    early_lag_penalty_weight: float,
     object_relative_reward_base: float,
     mid_object_relative_reward_bonus: float,
     late_task_reward_bonus: float,
@@ -837,6 +848,7 @@ def compute_rewards(
     mid_curriculum = 1.0 - torch.abs(2.0 * curriculum_progress - 1.0)
     position_imitation_scale = 1.0 + 0.5 * early_imitation_reward_bonus * early_curriculum
     pose_imitation_scale = 1.0 + early_imitation_reward_bonus * early_curriculum
+    early_episode_tracking_scale = 1.0 + early_episode_tracking_bonus * early_episode_gate
     object_relative_scale = object_relative_reward_base + mid_object_relative_reward_bonus * torch.clamp(
         curriculum_progress + mid_curriculum,
         0.0,
@@ -888,10 +900,11 @@ def compute_rewards(
         * (1.0 - proximity_gate)
         * torch.norm(actions[:, 3:9], p=2, dim=-1)
     )
+    early_lag_penalty = early_episode_gate * (hand_pos_err + hand_anchor_err)
 
     reward = (
-        position_imitation_scale * hand_pos_weight * hand_pos_reward
-        + pose_imitation_scale * hand_anchor_weight * hand_anchor_reward
+        position_imitation_scale * early_episode_tracking_scale * hand_pos_weight * hand_pos_reward
+        + pose_imitation_scale * early_episode_tracking_scale * hand_anchor_weight * hand_anchor_reward
         + object_relative_scale * hand_obj_offset_weight * hand_obj_offset_reward
         + object_relative_scale * anchor_obj_offset_weight * anchor_obj_offset_reward
         + pose_imitation_scale * hand_dof_weight * hand_dof_reward
@@ -907,6 +920,7 @@ def compute_rewards(
         + task_scale * lift_support_reward_weight * lift_support_reward
         + action_penalty_scale * action_penalty
         - no_grasp_rotation_penalty_weight * no_grasp_rotation_penalty
+        - early_lag_penalty_weight * early_lag_penalty
     )
 
     reward = torch.clamp_min(reward, 0.0)
@@ -916,6 +930,7 @@ def compute_rewards(
         "reward/hand": hand_reward,
         "reward/hand_pos": hand_pos_reward,
         "reward/hand_anchor": hand_anchor_reward,
+        "reward/early_episode_tracking_scale": early_episode_tracking_scale,
         "reward/hand_obj_offset": hand_obj_offset_reward,
         "reward/anchor_obj_offset": anchor_obj_offset_reward,
         "reward/hand_dof": hand_dof_reward,
@@ -949,6 +964,7 @@ def compute_rewards(
         "metric/contact_sustain": contact_sustain_reward,
         "penalty/action": action_penalty,
         "penalty/no_grasp_rotation": no_grasp_rotation_penalty,
+        "penalty/early_lag": early_lag_penalty,
         "error/hand_kpt": hand_kpt_err,
         "error/hand_pos": hand_pos_err,
         "error/hand_anchor": hand_anchor_err,
