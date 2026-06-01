@@ -217,6 +217,8 @@ class GrEnvCfg(DirectRLEnvCfg):
     hand_reward_weight = 1.0
     hand_pos_reward_weight = 0.8
     hand_anchor_reward_weight = 0.8
+    hand_obj_offset_reward_weight = 0.6
+    anchor_obj_offset_reward_weight = 0.8
     hand_rot_reward_weight = 0.4
     fingertip_reward_weight = 0.5
     fingertip_obj_proximity_reward_weight = 0.3
@@ -229,6 +231,8 @@ class GrEnvCfg(DirectRLEnvCfg):
     hand_reward_scale = 25.0
     hand_pos_reward_scale = 20.0
     hand_anchor_reward_scale = 15.0
+    hand_obj_offset_reward_scale = 12.0
+    anchor_obj_offset_reward_scale = 15.0
     hand_rot_reward_scale = 2.0
     anchor_rotation_gate_scale = 20.0
     fingertip_reward_scale = 40.0
