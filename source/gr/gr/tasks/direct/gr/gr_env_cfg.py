@@ -216,6 +216,7 @@ class GrEnvCfg(DirectRLEnvCfg):
 
     hand_reward_weight = 1.0
     hand_anchor_reward_weight = 0.8
+    hand_rot_reward_weight = 0.4
     fingertip_reward_weight = 0.5
     fingertip_obj_proximity_reward_weight = 0.3
     fingertip_obj_offset_reward_weight = 0.8
@@ -226,6 +227,8 @@ class GrEnvCfg(DirectRLEnvCfg):
 
     hand_reward_scale = 25.0
     hand_anchor_reward_scale = 15.0
+    hand_rot_reward_scale = 2.0
+    anchor_rotation_gate_scale = 20.0
     fingertip_reward_scale = 40.0
     fingertip_obj_proximity_reward_scale = 8.0
     fingertip_obj_offset_reward_scale = 15.0
@@ -235,6 +238,9 @@ class GrEnvCfg(DirectRLEnvCfg):
     contact_count_reward_weight = 0.5
     contact_sustain_reward_weight = 0.4
     lift_support_reward_weight = 0.8
+    early_imitation_reward_bonus = 1.0
+    late_task_reward_bonus = 1.0
+    reward_curriculum_steps = 18000
     contact_force_threshold = 0.005
     target_contact_fingers = 3.0
     contact_reward_max_force = 0.2
