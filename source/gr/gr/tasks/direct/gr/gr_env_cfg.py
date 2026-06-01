@@ -219,7 +219,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     hand_anchor_reward_weight = 0.8
     hand_obj_offset_reward_weight = 0.6
     anchor_obj_offset_reward_weight = 0.8
-    hand_rot_reward_weight = 0.4
+    hand_rot_reward_weight = 0.2
     fingertip_reward_weight = 0.5
     fingertip_obj_proximity_reward_weight = 0.3
     fingertip_obj_offset_reward_weight = 0.8
@@ -245,6 +245,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     contact_sustain_reward_weight = 0.4
     lift_support_reward_weight = 0.8
     early_imitation_reward_bonus = 1.0
+    object_relative_reward_base = 0.35
     mid_object_relative_reward_bonus = 1.0
     late_task_reward_bonus = 1.0
     reward_curriculum_steps = 18000
