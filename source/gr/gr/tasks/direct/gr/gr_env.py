@@ -138,8 +138,8 @@ class GrEnv(DirectRLEnv):
         self.delta_obj_pos_value = torch.zeros((self.num_envs, ), device=self.device)
 
         # frame idx
-        self.start_frame_idx = torch.zeros(self.num_envs, dtype=torch.int, device=self.device)
-        self.sampled_frame_idx = torch.zeros(self.num_envs, dtype=torch.int, device=self.device)
+        self.start_frame_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self.sampled_frame_idx = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
 
         # buffers for dof actions
         self.prev_dof_actions = torch.zeros((self.num_envs, self.num_hand_dof), dtype=torch.float, device=self.device)
