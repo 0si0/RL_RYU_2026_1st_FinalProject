@@ -15,8 +15,8 @@ class GrEnvCfg(TrainGrEnvCfg):
     play = True
 
     viewer: ViewerCfg = ViewerCfg(
-        eye=(1.9, 1.9, 1.1),
-        lookat=(0.9, 0.9, 0.2),
+        eye=(1.6, -1.2, 1.3),
+        lookat=(0.0, 0.0, 0.45),
     )
 
     scene: InteractiveSceneCfg = InteractiveSceneCfg(
