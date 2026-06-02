@@ -31,6 +31,7 @@ class GrEnv(DirectRLEnv):
         self.num_hand_dof = self.hand.num_joints
 
         self.num_kpts = len(self.cfg.MANO_kpts)
+        self.finger_joint_groups = torch.tensor(self.cfg.MANO_finger_joint_groups, dtype=torch.long, device=self.device)
         self.termination = not self.cfg.play
         self.play = self.cfg.play
         self.time_out = torch.zeros((self.num_envs, ), device=self.device).bool()
@@ -373,6 +374,7 @@ class GrEnv(DirectRLEnv):
             self.anchor_obj_offset_err,
             self.hand_dof_err,
             self.hand_rot_err,
+            self.finger_shape_err,
             self.fingertip_err,
             self.fingertip_obj_proximity_err,
             self.fingertip_obj_topk_proximity_err,
@@ -398,6 +400,7 @@ class GrEnv(DirectRLEnv):
             self.cfg.anchor_obj_offset_reward_weight,
             self.cfg.hand_dof_reward_weight,
             self.cfg.hand_rot_reward_weight,
+            self.cfg.finger_shape_reward_weight,
             self.cfg.fingertip_reward_weight,
             self.cfg.fingertip_obj_proximity_reward_weight,
             self.cfg.fingertip_obj_offset_reward_weight,
@@ -413,6 +416,8 @@ class GrEnv(DirectRLEnv):
             self.cfg.anchor_obj_offset_reward_scale,
             self.cfg.hand_dof_reward_scale,
             self.cfg.hand_rot_reward_scale,
+            self.cfg.finger_shape_reward_scale,
+            self.cfg.finger_shape_contact_decay,
             self.cfg.anchor_rotation_gate_scale,
             self.cfg.fingertip_reward_scale,
             self.cfg.fingertip_obj_proximity_reward_scale,
@@ -702,6 +707,16 @@ class GrEnv(DirectRLEnv):
         self.hand_anchor_err = torch.norm(self.hand_anchor_error, p=2, dim=-1).mean(dim=-1)
         self.hand_dof_err = torch.abs(self.hand_dof_pos - self.hand_dof_ref).mean(dim=-1)
         self.fingertip_err = torch.norm(self.fingertip_error, p=2, dim=-1).mean(dim=-1)
+        hand_finger_kpts = self.hand_kpts_pos[:, self.finger_joint_groups]
+        ref_finger_kpts = self.mano_kpts_pos_ref[:, self.finger_joint_groups]
+        finger_joint_err = torch.norm(hand_finger_kpts - ref_finger_kpts, p=2, dim=-1)
+        per_finger_pos_err = finger_joint_err.mean(dim=-1)
+        hand_finger_dirs = F.normalize(hand_finger_kpts[:, :, 1:] - hand_finger_kpts[:, :, :-1], dim=-1, eps=1.0e-6)
+        ref_finger_dirs = F.normalize(ref_finger_kpts[:, :, 1:] - ref_finger_kpts[:, :, :-1], dim=-1, eps=1.0e-6)
+        finger_dir_err = torch.norm(hand_finger_dirs - ref_finger_dirs, p=2, dim=-1).mean(dim=-1)
+        finger_pos_err = 0.7 * per_finger_pos_err.mean(dim=-1) + 0.3 * torch.max(per_finger_pos_err, dim=-1).values
+        finger_rot_like_err = 0.7 * finger_dir_err.mean(dim=-1) + 0.3 * torch.max(finger_dir_err, dim=-1).values
+        self.finger_shape_err = finger_pos_err + self.cfg.finger_direction_error_weight * finger_rot_like_err
         self.hand_obj_offset_err = torch.norm(
             (self.hand_pos - self.obj_pos) - self.hand_obj_ref_offset,
             p=2,
@@ -882,6 +897,7 @@ def compute_rewards(
     anchor_obj_offset_err: torch.Tensor,
     hand_dof_err: torch.Tensor,
     hand_rot_err: torch.Tensor,
+    finger_shape_err: torch.Tensor,
     fingertip_err: torch.Tensor,
     fingertip_obj_proximity_err: torch.Tensor,
     fingertip_obj_topk_proximity_err: torch.Tensor,
@@ -907,6 +923,7 @@ def compute_rewards(
     anchor_obj_offset_weight: float,
     hand_dof_weight: float,
     hand_rot_weight: float,
+    finger_shape_weight: float,
     fingertip_weight: float,
     fingertip_obj_proximity_weight: float,
     fingertip_obj_offset_weight: float,
@@ -922,6 +939,8 @@ def compute_rewards(
     anchor_obj_offset_reward_scale: float,
     hand_dof_reward_scale: float,
     hand_rot_reward_scale: float,
+    finger_shape_reward_scale: float,
+    finger_shape_contact_decay: float,
     anchor_rotation_gate_scale: float,
     fingertip_reward_scale: float,
     fingertip_obj_proximity_reward_scale: float,
@@ -1002,6 +1021,7 @@ def compute_rewards(
     anchor_position_gate = torch.exp(-anchor_rotation_gate_scale * hand_pos_err)
     anchor_rotation_gate = torch.maximum(anchor_position_gate, proximity_gate)
     hand_rot_reward = anchor_rotation_gate * torch.exp(-hand_rot_reward_scale * hand_rot_err)
+    finger_shape_reward = torch.exp(-finger_shape_reward_scale * finger_shape_err)
     fingertip_reward = torch.exp(-fingertip_reward_scale * fingertip_err)
     fingertip_obj_proximity_reward = torch.exp(-fingertip_obj_proximity_reward_scale * fingertip_obj_topk_proximity_err)
     fingertip_obj_offset_reward = torch.exp(-fingertip_obj_offset_reward_scale * fingertip_obj_offset_err)
@@ -1023,6 +1043,7 @@ def compute_rewards(
         + 0.3 * fingertip_obj_offset_reward
     )
     frame0_approach_gate = (start_frame_idx == 0).float() * approach_phase
+    finger_shape_phase_scale = approach_phase + grasp_phase + finger_shape_contact_decay * manipulation_phase
     frame0_approach_pose_bonus = frame0_approach_gate * (
         0.5 * hand_dof_reward
         + 0.5 * fingertip_reward
@@ -1051,6 +1072,7 @@ def compute_rewards(
         + no_contact_mano_gate * pose_imitation_scale * hand_dof_weight * hand_dof_reward
         + no_contact_mano_gate * late_contact_reward_gate * pose_imitation_scale * hand_weight * hand_reward
         + no_contact_mano_gate * late_contact_reward_gate * mano_regrasp_scale * anchor_object_gate * hand_rot_weight * hand_rot_reward
+        + no_contact_mano_gate * pose_imitation_scale * finger_shape_phase_scale * finger_shape_weight * finger_shape_reward
         + no_contact_mano_gate * late_contact_reward_gate * pose_imitation_scale * fingertip_weight * fingertip_reward
         + grasp_object_scale * fingertip_obj_proximity_weight * fingertip_obj_proximity_reward
         + grasp_object_scale * object_relative_scale * fingertip_obj_offset_weight * fingertip_obj_offset_reward
@@ -1077,6 +1099,7 @@ def compute_rewards(
         "reward/anchor_obj_offset": anchor_obj_offset_reward,
         "reward/hand_dof": hand_dof_reward,
         "reward/hand_rot": hand_rot_reward,
+        "reward/finger_shape": finger_shape_reward,
         "reward/fingertip": fingertip_reward,
         "reward/fingertip_obj_proximity": fingertip_obj_proximity_reward,
         "reward/fingertip_obj_offset": fingertip_obj_offset_reward,
@@ -1099,6 +1122,7 @@ def compute_rewards(
         "metric/grasp_phase": grasp_phase,
         "metric/manipulation_phase": manipulation_phase,
         "metric/no_contact_mano_gate": no_contact_mano_gate,
+        "metric/finger_shape_phase_scale": finger_shape_phase_scale,
         "metric/position_imitation_scale": position_imitation_scale,
         "metric/pose_imitation_scale": pose_imitation_scale,
         "metric/mano_regrasp_scale": mano_regrasp_scale,
@@ -1122,6 +1146,7 @@ def compute_rewards(
         "error/anchor_obj_offset": anchor_obj_offset_err,
         "error/hand_dof": hand_dof_err,
         "error/hand_rot": hand_rot_err,
+        "error/finger_shape": finger_shape_err,
         "error/fingertip": fingertip_err,
         "error/fingertip_obj_proximity": fingertip_obj_proximity_err,
         "error/fingertip_obj_proximity_topk": fingertip_obj_topk_proximity_err,
