@@ -1036,7 +1036,12 @@ def compute_rewards(
         0.5 * hand_dof_reward
         + 0.5 * fingertip_reward
     )
-    successful_grasp_dof_bonus = contact_sustain_reward * lift_reward * hand_dof_reward
+    successful_grasp_shape_reward = (
+        0.5 * hand_dof_reward
+        + 0.3 * fingertip_reward
+        + 0.2 * fingertip_obj_offset_reward
+    )
+    successful_grasp_shape_bonus = contact_sustain_reward * lift_reward * successful_grasp_shape_reward
 
     action_penalty = torch.sum(actions * actions, dim=-1)
     no_grasp_rotation_penalty = (
@@ -1064,7 +1069,7 @@ def compute_rewards(
         + object_gate * obj_vel_weight * obj_vel_reward
         + task_scale * lift_support_reward_weight * lift_support_reward
         + frame0_approach_pose_bonus_weight * frame0_approach_pose_bonus
-        + successful_grasp_dof_bonus_weight * successful_grasp_dof_bonus
+        + successful_grasp_dof_bonus_weight * successful_grasp_shape_bonus
         + action_penalty_scale * action_penalty
         - no_grasp_rotation_penalty_weight * no_grasp_rotation_penalty
         - early_lag_penalty_weight * early_lag_penalty
@@ -1090,7 +1095,7 @@ def compute_rewards(
         "reward/contact_sustain": contact_sustain_reward,
         "reward/lift_support": lift_support_reward,
         "reward/frame0_approach_pose_bonus": frame0_approach_pose_bonus,
-        "reward/successful_grasp_dof_bonus": successful_grasp_dof_bonus,
+        "reward/successful_grasp_shape_bonus": successful_grasp_shape_bonus,
         "reward/lift": lift_reward,
         "reward/object_pos": obj_pos_reward,
         "reward/object_rot": obj_rot_reward,
