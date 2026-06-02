@@ -67,6 +67,10 @@ class GrEnv(DirectRLEnv):
         self.obj_rot_ref = torch.zeros((self.num_envs, 4), device=self.device)
         self.hand_rot_ref[:,0] = 1.0
         self.obj_rot_ref[:,0] = 1.0
+        self.lookahead_ref_obs = torch.zeros(
+            (self.num_envs, 33 * len(self.cfg.lookahead_reference_steps)),
+            device=self.device,
+        )
 
         # object parameters
         self.obj_pos = torch.zeros((self.num_envs, 3), device=self.device)
@@ -119,6 +123,7 @@ class GrEnv(DirectRLEnv):
         self.fingertip_contact_force_norm = torch.zeros((self.num_envs, self.num_fingertips), device=self.device)
         self.contact_duration = torch.zeros((self.num_envs, ), device=self.device)
         self.no_contact_duration = torch.zeros((self.num_envs, ), device=self.device)
+        self.phase_success_score = torch.zeros((self.num_envs, ), device=self.device)
 
         # joint limits
         joint_pos_limits = self.hand.root_physx_view.get_dof_limits().to(self.device)
@@ -193,6 +198,7 @@ class GrEnv(DirectRLEnv):
         # Use fingertip contact patches as MANO fingertip keypoints.
         seq_len = self.obj_pos_seq.shape[0]
         self.mano_anchor_center_seq = self.mano_kpts_pos_seq[:, self.cfg.MANO_anchors].mean(dim=1)
+        self.reference_phase_weights = torch.ones(seq_len, device=self.device)
 
         dof_lower_limits = self.hand_dof_lower_limits[0] if self.hand_dof_lower_limits.ndim == 2 else self.hand_dof_lower_limits
         dof_upper_limits = self.hand_dof_upper_limits[0] if self.hand_dof_upper_limits.ndim == 2 else self.hand_dof_upper_limits
@@ -423,6 +429,7 @@ class GrEnv(DirectRLEnv):
             self.cfg.grasp_object_bonus,
             self.cfg.manipulation_task_bonus,
             self.cfg.manipulation_imitation_bonus,
+            self.cfg.no_contact_mano_imitation_floor,
             self.cfg.object_relative_reward_base,
             self.cfg.mid_object_relative_reward_bonus,
             self.cfg.late_task_reward_bonus,
@@ -461,8 +468,10 @@ class GrEnv(DirectRLEnv):
     def _reset_idx(self, env_ids: Sequence[int] | None):
         if env_ids is None:
             env_ids = self.hand._ALL_INDICES
+        self._update_reference_phase_weights(env_ids)
         # resets articulation and rigid body attributes
         super()._reset_idx(env_ids)
+        self._sample_reference_phase(env_ids)
         # Reset object
         self._reset_object(env_ids)
         # Reset hand
@@ -475,7 +484,49 @@ class GrEnv(DirectRLEnv):
         self.successes[env_ids] = 0
         self.contact_duration[env_ids] = 0
         self.no_contact_duration[env_ids] = 0
+        self.phase_success_score[env_ids] = 0
         self._compute_intermediate_values()
+
+
+    def _sample_reference_phase(self, env_ids):
+        if self.play or not self.cfg.random_reference_phase_sampling:
+            self.start_frame_idx[env_ids] = 0
+            self.sampled_frame_idx[env_ids] = 0
+            self.episode_length_buf[env_ids] = 0
+            return
+
+        max_start = max(0, self.max_episode_length - int(self.cfg.reference_phase_min_remaining_steps) - 1)
+        num_envs = len(env_ids)
+        uniform_frames = torch.randint(0, max_start + 1, (num_envs,), device=self.device)
+        weights = self.reference_phase_weights[: max_start + 1].clamp_min(1.0e-6)
+        biased_frames = torch.multinomial(weights, num_envs, replacement=True)
+        use_uniform = torch.rand(num_envs, device=self.device) < self.cfg.reference_phase_uniform_ratio
+        sampled_frames = torch.where(use_uniform, uniform_frames, biased_frames).long()
+
+        self.start_frame_idx[env_ids] = sampled_frames
+        self.sampled_frame_idx[env_ids] = sampled_frames
+        self.episode_length_buf[env_ids] = sampled_frames
+
+
+    def _update_reference_phase_weights(self, env_ids):
+        if not hasattr(self, "reference_phase_weights"):
+            return
+        if self.play or not self.cfg.success_biased_phase_sampling:
+            return
+
+        scores = self.phase_success_score[env_ids].detach().clamp_min(0.0)
+        active = scores > 0.0
+        if not torch.any(active):
+            return
+
+        frames = self.start_frame_idx[env_ids][active].long()
+        scores = scores[active]
+        max_index = self.reference_phase_weights.shape[0] - 1
+        radius = int(self.cfg.success_phase_spread)
+        self.reference_phase_weights.mul_(self.cfg.success_phase_weight_decay).clamp_(min=1.0)
+        for offset in range(-radius, radius + 1):
+            idx = torch.clamp(frames + offset, 0, max_index)
+            self.reference_phase_weights.index_add_(0, idx, scores * self.cfg.success_phase_weight_gain)
 
 
     def _set_object_state(self, pos, rot, env_ids, vel=None):
@@ -493,9 +544,11 @@ class GrEnv(DirectRLEnv):
 
 
     def _reset_object(self, env_ids):
-        self.obj_pos_reset[env_ids] = self.obj_pos_seq[0]
-        self.obj_rot_reset[env_ids] = self.obj_rot_seq[0]
-        self._set_object_state(self.obj_pos_reset[env_ids], self.obj_rot_reset[env_ids], env_ids)
+        frame_ids = self.start_frame_idx[env_ids].long()
+        self.obj_pos_reset[env_ids] = self.obj_pos_seq[frame_ids]
+        self.obj_rot_reset[env_ids] = self.obj_rot_seq[frame_ids]
+        obj_vel = torch.cat((self.obj_linvel_seq[frame_ids], self.obj_angvel_seq[frame_ids]), dim=-1)
+        self._set_object_state(self.obj_pos_reset[env_ids], self.obj_rot_reset[env_ids], env_ids, obj_vel)
 
 
     def _set_hand_state(self, pos, rot, dof_pos, dof_vel, root_vel, dof_target, ext_force, ext_torque, env_ids):
@@ -520,10 +573,12 @@ class GrEnv(DirectRLEnv):
 
 
     def _reset_hand(self, env_ids):
-        self.hand_pos_reset[env_ids] = self.hand_pos_reset_base[env_ids]
-        self.hand_rot_reset[env_ids] = self.hand_rot_reset_base[env_ids]
+        frame_ids = self.start_frame_idx[env_ids].long()
+        hand_anchor_delta = self.mano_anchor_center_seq[frame_ids] - self.mano_anchor_center_seq[0]
+        self.hand_pos_reset[env_ids] = self.hand_pos_reset_base[env_ids] + hand_anchor_delta
+        self.hand_rot_reset[env_ids] = self.hand_rot_ref_seq[frame_ids]
 
-        dof_pos = self.hand_dof_pos_reset[env_ids]
+        dof_pos = self.hand_dof_seq[frame_ids]
         dof_vel = torch.zeros_like(self.hand.data.default_joint_vel[env_ids])
         root_vel = torch.zeros_like(self.hand.data.default_root_state[env_ids, 7:13])
 
@@ -705,6 +760,10 @@ class GrEnv(DirectRLEnv):
             1.0,
         )
         self.proximity_gate = torch.exp(-self.cfg.proximity_gate_scale * self.fingertip_obj_topk_proximity_err)
+        self.phase_success_score = torch.maximum(
+            self.phase_success_score,
+            torch.clamp(0.5 * self.contact_sustain + 0.5 * self.object_lift, 0.0, 1.0),
+        )
 
         self.palm_to_obj = self.hand_pos - self.obj_pos
         self.palm_obj_dist = torch.norm(self.palm_to_obj, p=2, dim=-1)
@@ -727,6 +786,7 @@ class GrEnv(DirectRLEnv):
             torch.logical_or(self.hand_far_apart, self.obj_far_apart),
             torch.logical_or(self.obj_rot_far_apart, self.no_grasp_failure),
         )
+        self._compute_lookahead_observations()
 
         if not self.play:
             # Point visualization for debugging; you may change which points are shown.
@@ -734,6 +794,29 @@ class GrEnv(DirectRLEnv):
             self.goal_markers.visualize(debug_vis1.view(-1,3))
             debug_vis2 = self.hand_kpts_pos[:, self.cfg.MANO_fingertips] + self.scene.env_origins.unsqueeze(1)
             self.debug_markers.visualize(debug_vis2.view(-1,3))
+
+
+    def _compute_lookahead_observations(self):
+        lookahead_parts = []
+        for step in self.cfg.lookahead_reference_steps:
+            t_future = torch.clamp(
+                self.episode_length_buf + int(step),
+                max=(self.max_episode_length - 1),
+            )
+            hand_anchor_delta = self.mano_anchor_center_seq[t_future] - self.mano_anchor_center_seq[0]
+            hand_pos_future = self.hand_pos_reset_base + hand_anchor_delta
+            fingertip_pos_future = self.fingertip_pos_seq[t_future]
+            fingertip_obj_offset_future = self.obj_fingertip_pos_seq_offset[t_future]
+
+            lookahead_parts.extend(
+                (
+                    hand_pos_future - self.hand_pos,
+                    (fingertip_pos_future - self.fingertip_pos).reshape(self.num_envs, -1),
+                    (fingertip_obj_offset_future - self.fingertip_to_obj).reshape(self.num_envs, -1),
+                )
+            )
+
+        self.lookahead_ref_obs = torch.cat(lookahead_parts, dim=-1)
 
 
     def compute_full_observations(self):
@@ -753,6 +836,7 @@ class GrEnv(DirectRLEnv):
 
             self.hand_kpt_error.reshape(self.num_envs, -1),
             self.fingertip_to_obj.reshape(self.num_envs, -1),
+            self.lookahead_ref_obs,
 
             self.obj_pos_error,
             quat_to_6d(self.obj_rot_error_quat),
@@ -846,6 +930,7 @@ def compute_rewards(
     grasp_object_bonus: float,
     manipulation_task_bonus: float,
     manipulation_imitation_bonus: float,
+    no_contact_mano_imitation_floor: float,
     object_relative_reward_base: float,
     mid_object_relative_reward_bonus: float,
     late_task_reward_bonus: float,
@@ -869,6 +954,11 @@ def compute_rewards(
     grasp_phase = (1.0 - approach_phase) * (1.0 - contact_sustain)
     manipulation_phase = contact_sustain
     approach_imitation_scale = 1.0 + approach_imitation_bonus * approach_phase
+    contact_or_proximity = torch.maximum(contact_sustain, proximity_gate)
+    no_contact_mano_gate = approach_phase + (1.0 - approach_phase) * (
+        no_contact_mano_imitation_floor
+        + (1.0 - no_contact_mano_imitation_floor) * contact_or_proximity
+    )
     position_imitation_scale = (
         1.0
         + 0.5 * early_imitation_reward_bonus * early_curriculum
@@ -935,14 +1025,14 @@ def compute_rewards(
     early_lag_penalty = early_episode_gate * (hand_pos_err + hand_anchor_err)
 
     reward = (
-        position_imitation_scale * mano_regrasp_scale * hand_pos_weight * hand_pos_reward
-        + pose_imitation_scale * mano_regrasp_scale * hand_anchor_weight * hand_anchor_reward
+        no_contact_mano_gate * position_imitation_scale * mano_regrasp_scale * hand_pos_weight * hand_pos_reward
+        + no_contact_mano_gate * pose_imitation_scale * mano_regrasp_scale * hand_anchor_weight * hand_anchor_reward
         + grasp_object_scale * object_relative_scale * hand_obj_offset_weight * hand_obj_offset_reward
         + grasp_object_scale * object_relative_scale * anchor_obj_offset_weight * anchor_obj_offset_reward
-        + pose_imitation_scale * hand_dof_weight * hand_dof_reward
-        + late_contact_reward_gate * pose_imitation_scale * hand_weight * hand_reward
-        + late_contact_reward_gate * mano_regrasp_scale * anchor_object_gate * hand_rot_weight * hand_rot_reward
-        + late_contact_reward_gate * pose_imitation_scale * fingertip_weight * fingertip_reward
+        + no_contact_mano_gate * pose_imitation_scale * hand_dof_weight * hand_dof_reward
+        + no_contact_mano_gate * late_contact_reward_gate * pose_imitation_scale * hand_weight * hand_reward
+        + no_contact_mano_gate * late_contact_reward_gate * mano_regrasp_scale * anchor_object_gate * hand_rot_weight * hand_rot_reward
+        + no_contact_mano_gate * late_contact_reward_gate * pose_imitation_scale * fingertip_weight * fingertip_reward
         + grasp_object_scale * fingertip_obj_proximity_weight * fingertip_obj_proximity_reward
         + grasp_object_scale * object_relative_scale * fingertip_obj_offset_weight * fingertip_obj_offset_reward
         + grasp_object_scale * task_scale * contact_weight * contact_reward
@@ -985,6 +1075,7 @@ def compute_rewards(
         "metric/approach_phase": approach_phase,
         "metric/grasp_phase": grasp_phase,
         "metric/manipulation_phase": manipulation_phase,
+        "metric/no_contact_mano_gate": no_contact_mano_gate,
         "metric/position_imitation_scale": position_imitation_scale,
         "metric/pose_imitation_scale": pose_imitation_scale,
         "metric/mano_regrasp_scale": mano_regrasp_scale,

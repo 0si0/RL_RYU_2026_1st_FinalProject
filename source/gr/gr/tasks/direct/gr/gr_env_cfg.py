@@ -40,7 +40,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     asymmetric_obs = False
     
     # TODO: Match this dimension to the observation vector built in gr_env.py.
-    observation_space = 176
+    observation_space = 275
 
     # env
     decimation = 4
@@ -59,6 +59,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     MANO_fingertips = [4, 8, 12, 16, 20]
     MANO_rigids = [0, 5, 9, 13]
     MANO_anchors = [0, 5, 9, 13, 17]
+    lookahead_reference_steps = (1, 5, 10)
 
     seq_ref_path = SEQ_PATH
     obj_path = OBJ_PATH
@@ -254,6 +255,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     grasp_object_bonus = 0.5
     manipulation_task_bonus = 0.6
     manipulation_imitation_bonus = 0.4
+    no_contact_mano_imitation_floor = 0.25
     object_relative_reward_base = 0.35
     mid_object_relative_reward_bonus = 1.0
     late_task_reward_bonus = 1.0
@@ -279,6 +281,13 @@ class GrEnvCfg(DirectRLEnvCfg):
     obj_rot_terminate_after_steps = 80.0
     no_grasp_terminate_after_steps = 110.0
     no_grasp_terminate_grace_steps = 70.0
+    random_reference_phase_sampling = True
+    reference_phase_min_remaining_steps = 45
+    reference_phase_uniform_ratio = 0.35
+    success_biased_phase_sampling = True
+    success_phase_weight_decay = 0.995
+    success_phase_weight_gain = 0.2
+    success_phase_spread = 4
 
     act_moving_average = 0.5
     global_moving_average = 0.4
