@@ -1029,7 +1029,7 @@ def compute_rewards(
         + no_contact_mano_gate * pose_imitation_scale * mano_regrasp_scale * hand_anchor_weight * hand_anchor_reward
         + grasp_object_scale * object_relative_scale * hand_obj_offset_weight * hand_obj_offset_reward
         + grasp_object_scale * object_relative_scale * anchor_obj_offset_weight * anchor_obj_offset_reward
-        + no_contact_mano_gate * pose_imitation_scale * hand_dof_weight * hand_dof_reward
+        + no_contact_mano_gate * pose_imitation_scale * mano_regrasp_scale * hand_dof_weight * hand_dof_reward
         + no_contact_mano_gate * late_contact_reward_gate * pose_imitation_scale * hand_weight * hand_reward
         + no_contact_mano_gate * late_contact_reward_gate * mano_regrasp_scale * anchor_object_gate * hand_rot_weight * hand_rot_reward
         + no_contact_mano_gate * late_contact_reward_gate * pose_imitation_scale * fingertip_weight * fingertip_reward
