@@ -246,7 +246,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     contact_force_reward_weight = 0.5
     contact_count_reward_weight = 0.5
     contact_sustain_reward_weight = 0.4
-    lift_support_reward_weight = 1.0
+    transport_support_reward_weight = 1.0
     early_imitation_reward_bonus = 0.6
     early_episode_tracking_frames = 70.0
     early_episode_tracking_bonus = 0.8
@@ -271,8 +271,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     contact_reward_max_force = 0.2
     contact_topk_fingers = 3
     contact_sustain_target_steps = 8.0
-    lift_target_height = 0.08
-    obj_pos_reward_scale = 30.0
+    obj_pos_reward_scale = 20.0
     obj_rot_reward_scale = 2.0
     obj_vel_reward_scale = 2.0
     obj_angvel_reward_scale = 0.2

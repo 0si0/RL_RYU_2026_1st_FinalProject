@@ -384,7 +384,6 @@ class GrEnv(DirectRLEnv):
             self.proximity_gate,
             self.contact_sustain,
             self.no_contact_sustain,
-            self.object_lift,
             self.start_frame_idx,
             self.obj_pos_err,
             self.obj_rot_err,
@@ -422,7 +421,7 @@ class GrEnv(DirectRLEnv):
             self.cfg.contact_force_reward_weight,
             self.cfg.contact_count_reward_weight,
             self.cfg.contact_sustain_reward_weight,
-            self.cfg.lift_support_reward_weight,
+            self.cfg.transport_support_reward_weight,
             self.cfg.early_imitation_reward_bonus,
             self.cfg.early_episode_tracking_bonus,
             self.cfg.early_lag_penalty_weight,
@@ -768,15 +767,10 @@ class GrEnv(DirectRLEnv):
             0.0,
             1.0,
         )
-        self.object_lift = torch.clamp(
-            (self.obj_pos[:, 2] - self.obj_pos_reset[:, 2]) / (self.cfg.lift_target_height + 1.0e-6),
-            0.0,
-            1.0,
-        )
         self.proximity_gate = torch.exp(-self.cfg.proximity_gate_scale * self.fingertip_obj_topk_proximity_err)
         self.phase_success_score = torch.maximum(
             self.phase_success_score,
-            torch.clamp(0.5 * self.contact_sustain + 0.5 * self.object_lift, 0.0, 1.0),
+            torch.clamp(self.contact_sustain, 0.0, 1.0),
         )
 
         self.palm_to_obj = self.hand_pos - self.obj_pos
@@ -899,7 +893,6 @@ def compute_rewards(
     proximity_gate: torch.Tensor,
     contact_sustain: torch.Tensor,
     no_contact_sustain: torch.Tensor,
-    object_lift: torch.Tensor,
     start_frame_idx: torch.Tensor,
     obj_pos_err: torch.Tensor,
     obj_rot_err: torch.Tensor,
@@ -937,7 +930,7 @@ def compute_rewards(
     contact_force_reward_weight: float,
     contact_count_reward_weight: float,
     contact_sustain_reward_weight: float,
-    lift_support_reward_weight: float,
+    transport_support_reward_weight: float,
     early_imitation_reward_bonus: float,
     early_episode_tracking_bonus: float,
     early_lag_penalty_weight: float,
@@ -1025,10 +1018,8 @@ def compute_rewards(
     obj_vel_reward = torch.exp(-obj_vel_reward_scale * obj_vel_err)
     object_gate = object_reward_gate_base + (1.0 - object_reward_gate_base) * proximity_gate
     contact_gate = torch.clamp(num_contact_fingers / (target_contact_fingers + 1.0e-6), 0.0, 1.0)
-    lift_reward = torch.clamp(object_lift, 0.0, 1.0)
-    lift_support_reward = contact_gate * contact_sustain_reward * (
-        0.4 * lift_reward
-        + 0.3 * obj_pos_reward
+    transport_support_reward = contact_gate * contact_sustain_reward * (
+        0.7 * obj_pos_reward
         + 0.3 * fingertip_obj_offset_reward
     )
     frame0_approach_gate = (start_frame_idx == 0).float() * approach_phase
@@ -1041,7 +1032,7 @@ def compute_rewards(
         + 0.3 * fingertip_reward
         + 0.2 * fingertip_obj_offset_reward
     )
-    successful_grasp_shape_bonus = contact_sustain_reward * lift_reward * successful_grasp_shape_reward
+    successful_grasp_shape_bonus = contact_sustain_reward * fingertip_obj_offset_reward * successful_grasp_shape_reward
 
     action_penalty = torch.sum(actions * actions, dim=-1)
     no_grasp_rotation_penalty = (
@@ -1067,7 +1058,7 @@ def compute_rewards(
         + object_gate * obj_pos_weight * obj_pos_reward
         + object_gate * obj_rot_weight * obj_rot_reward
         + object_gate * obj_vel_weight * obj_vel_reward
-        + task_scale * lift_support_reward_weight * lift_support_reward
+        + task_scale * transport_support_reward_weight * transport_support_reward
         + frame0_approach_pose_bonus_weight * frame0_approach_pose_bonus
         + successful_grasp_dof_bonus_weight * successful_grasp_shape_bonus
         + action_penalty_scale * action_penalty
@@ -1093,10 +1084,9 @@ def compute_rewards(
         "reward/contact_force": contact_force_reward,
         "reward/contact_count": contact_count_reward,
         "reward/contact_sustain": contact_sustain_reward,
-        "reward/lift_support": lift_support_reward,
+        "reward/transport_support": transport_support_reward,
         "reward/frame0_approach_pose_bonus": frame0_approach_pose_bonus,
         "reward/successful_grasp_shape_bonus": successful_grasp_shape_bonus,
-        "reward/lift": lift_reward,
         "reward/object_pos": obj_pos_reward,
         "reward/object_rot": obj_rot_reward,
         "reward/object_vel": obj_vel_reward,
@@ -1141,7 +1131,6 @@ def compute_rewards(
         "metric/contact_force": contact_force,
         "metric/contact_force_projected": projected_contact_force,
         "metric/contact_force_max": max_contact_force,
-        "metric/object_lift": object_lift,
     }
     
     return reward, logs_dict
