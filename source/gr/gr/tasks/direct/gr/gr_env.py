@@ -1041,8 +1041,7 @@ def compute_rewards(
         + 0.3 * fingertip_reward
         + 0.2 * fingertip_obj_offset_reward
     )
-    grasp_confidence = contact_sustain_reward * torch.clamp(fingertip_obj_offset_reward, 0.0, 1.0)
-    successful_grasp_shape_bonus = grasp_confidence * successful_grasp_shape_reward
+    successful_grasp_shape_bonus = contact_sustain_reward * lift_reward * successful_grasp_shape_reward
 
     action_penalty = torch.sum(actions * actions, dim=-1)
     no_grasp_rotation_penalty = (
@@ -1123,7 +1122,6 @@ def compute_rewards(
         "metric/no_contact_sustain": no_contact_sustain,
         "metric/contact_fingers": num_contact_fingers,
         "metric/contact_sustain": contact_sustain_reward,
-        "metric/grasp_confidence": grasp_confidence,
         "penalty/action": action_penalty,
         "penalty/no_grasp_rotation": no_grasp_rotation_penalty,
         "penalty/early_lag": early_lag_penalty,
