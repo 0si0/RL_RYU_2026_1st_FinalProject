@@ -284,7 +284,8 @@ class GrEnvCfg(DirectRLEnvCfg):
     no_grasp_terminate_grace_steps = 70.0
     random_reference_phase_sampling = True
     reference_phase_min_remaining_steps = 45
-    reference_phase_uniform_ratio = 0.35
+    reference_phase_frame0_ratio = 0.60
+    reference_phase_uniform_ratio = 0.30
     success_biased_phase_sampling = True
     success_phase_weight_decay = 0.995
     success_phase_weight_gain = 0.2

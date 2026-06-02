@@ -498,11 +498,22 @@ class GrEnv(DirectRLEnv):
 
         max_start = max(0, self.max_episode_length - int(self.cfg.reference_phase_min_remaining_steps) - 1)
         num_envs = len(env_ids)
+        zero_frames = torch.zeros(num_envs, dtype=torch.long, device=self.device)
         uniform_frames = torch.randint(0, max_start + 1, (num_envs,), device=self.device)
         weights = self.reference_phase_weights[: max_start + 1].clamp_min(1.0e-6)
-        biased_frames = torch.multinomial(weights, num_envs, replacement=True)
-        use_uniform = torch.rand(num_envs, device=self.device) < self.cfg.reference_phase_uniform_ratio
-        sampled_frames = torch.where(use_uniform, uniform_frames, biased_frames).long()
+        if self.cfg.success_biased_phase_sampling:
+            biased_frames = torch.multinomial(weights, num_envs, replacement=True)
+        else:
+            biased_frames = uniform_frames
+
+        phase_sample = torch.rand(num_envs, device=self.device)
+        frame0_cutoff = self.cfg.reference_phase_frame0_ratio
+        uniform_cutoff = frame0_cutoff + self.cfg.reference_phase_uniform_ratio
+        sampled_frames = torch.where(
+            phase_sample < frame0_cutoff,
+            zero_frames,
+            torch.where(phase_sample < uniform_cutoff, uniform_frames, biased_frames),
+        ).long()
 
         self.start_frame_idx[env_ids] = sampled_frames
         self.sampled_frame_idx[env_ids] = sampled_frames
