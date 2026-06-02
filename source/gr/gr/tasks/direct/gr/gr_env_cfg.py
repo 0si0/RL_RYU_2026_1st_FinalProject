@@ -255,6 +255,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     grasp_object_bonus = 0.5
     manipulation_task_bonus = 0.6
     manipulation_imitation_bonus = 0.4
+    successful_grasp_dof_bonus_weight = 0.25
     no_contact_mano_imitation_floor = 0.25
     object_relative_reward_base = 0.35
     mid_object_relative_reward_bonus = 1.0

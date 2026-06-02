@@ -429,6 +429,7 @@ class GrEnv(DirectRLEnv):
             self.cfg.grasp_object_bonus,
             self.cfg.manipulation_task_bonus,
             self.cfg.manipulation_imitation_bonus,
+            self.cfg.successful_grasp_dof_bonus_weight,
             self.cfg.no_contact_mano_imitation_floor,
             self.cfg.object_relative_reward_base,
             self.cfg.mid_object_relative_reward_bonus,
@@ -930,6 +931,7 @@ def compute_rewards(
     grasp_object_bonus: float,
     manipulation_task_bonus: float,
     manipulation_imitation_bonus: float,
+    successful_grasp_dof_bonus_weight: float,
     no_contact_mano_imitation_floor: float,
     object_relative_reward_base: float,
     mid_object_relative_reward_bonus: float,
@@ -1014,6 +1016,7 @@ def compute_rewards(
         + 0.3 * obj_pos_reward
         + 0.3 * fingertip_obj_offset_reward
     )
+    successful_grasp_dof_bonus = contact_sustain_reward * lift_reward * hand_dof_reward
 
     action_penalty = torch.sum(actions * actions, dim=-1)
     no_grasp_rotation_penalty = (
@@ -1029,7 +1032,7 @@ def compute_rewards(
         + no_contact_mano_gate * pose_imitation_scale * mano_regrasp_scale * hand_anchor_weight * hand_anchor_reward
         + grasp_object_scale * object_relative_scale * hand_obj_offset_weight * hand_obj_offset_reward
         + grasp_object_scale * object_relative_scale * anchor_obj_offset_weight * anchor_obj_offset_reward
-        + no_contact_mano_gate * pose_imitation_scale * mano_regrasp_scale * hand_dof_weight * hand_dof_reward
+        + no_contact_mano_gate * pose_imitation_scale * hand_dof_weight * hand_dof_reward
         + no_contact_mano_gate * late_contact_reward_gate * pose_imitation_scale * hand_weight * hand_reward
         + no_contact_mano_gate * late_contact_reward_gate * mano_regrasp_scale * anchor_object_gate * hand_rot_weight * hand_rot_reward
         + no_contact_mano_gate * late_contact_reward_gate * pose_imitation_scale * fingertip_weight * fingertip_reward
@@ -1040,6 +1043,7 @@ def compute_rewards(
         + object_gate * obj_rot_weight * obj_rot_reward
         + object_gate * obj_vel_weight * obj_vel_reward
         + task_scale * lift_support_reward_weight * lift_support_reward
+        + successful_grasp_dof_bonus_weight * successful_grasp_dof_bonus
         + action_penalty_scale * action_penalty
         - no_grasp_rotation_penalty_weight * no_grasp_rotation_penalty
         - early_lag_penalty_weight * early_lag_penalty
@@ -1064,6 +1068,7 @@ def compute_rewards(
         "reward/contact_count": contact_count_reward,
         "reward/contact_sustain": contact_sustain_reward,
         "reward/lift_support": lift_support_reward,
+        "reward/successful_grasp_dof_bonus": successful_grasp_dof_bonus,
         "reward/lift": lift_reward,
         "reward/object_pos": obj_pos_reward,
         "reward/object_rot": obj_rot_reward,
