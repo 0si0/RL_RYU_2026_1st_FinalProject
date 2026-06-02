@@ -385,6 +385,7 @@ class GrEnv(DirectRLEnv):
             self.contact_sustain,
             self.no_contact_sustain,
             self.object_lift,
+            self.start_frame_idx,
             self.obj_pos_err,
             self.obj_rot_err,
             self.obj_linvel_error,
@@ -430,6 +431,7 @@ class GrEnv(DirectRLEnv):
             self.cfg.manipulation_task_bonus,
             self.cfg.manipulation_imitation_bonus,
             self.cfg.successful_grasp_dof_bonus_weight,
+            self.cfg.frame0_approach_pose_bonus_weight,
             self.cfg.no_contact_mano_imitation_floor,
             self.cfg.object_relative_reward_base,
             self.cfg.mid_object_relative_reward_bonus,
@@ -898,6 +900,7 @@ def compute_rewards(
     contact_sustain: torch.Tensor,
     no_contact_sustain: torch.Tensor,
     object_lift: torch.Tensor,
+    start_frame_idx: torch.Tensor,
     obj_pos_err: torch.Tensor,
     obj_rot_err: torch.Tensor,
     obj_linvel_error: torch.Tensor,
@@ -943,6 +946,7 @@ def compute_rewards(
     manipulation_task_bonus: float,
     manipulation_imitation_bonus: float,
     successful_grasp_dof_bonus_weight: float,
+    frame0_approach_pose_bonus_weight: float,
     no_contact_mano_imitation_floor: float,
     object_relative_reward_base: float,
     mid_object_relative_reward_bonus: float,
@@ -1027,6 +1031,11 @@ def compute_rewards(
         + 0.3 * obj_pos_reward
         + 0.3 * fingertip_obj_offset_reward
     )
+    frame0_approach_gate = (start_frame_idx == 0).float() * approach_phase
+    frame0_approach_pose_bonus = frame0_approach_gate * (
+        0.5 * hand_dof_reward
+        + 0.5 * fingertip_reward
+    )
     successful_grasp_dof_bonus = contact_sustain_reward * lift_reward * hand_dof_reward
 
     action_penalty = torch.sum(actions * actions, dim=-1)
@@ -1054,6 +1063,7 @@ def compute_rewards(
         + object_gate * obj_rot_weight * obj_rot_reward
         + object_gate * obj_vel_weight * obj_vel_reward
         + task_scale * lift_support_reward_weight * lift_support_reward
+        + frame0_approach_pose_bonus_weight * frame0_approach_pose_bonus
         + successful_grasp_dof_bonus_weight * successful_grasp_dof_bonus
         + action_penalty_scale * action_penalty
         - no_grasp_rotation_penalty_weight * no_grasp_rotation_penalty
@@ -1079,6 +1089,7 @@ def compute_rewards(
         "reward/contact_count": contact_count_reward,
         "reward/contact_sustain": contact_sustain_reward,
         "reward/lift_support": lift_support_reward,
+        "reward/frame0_approach_pose_bonus": frame0_approach_pose_bonus,
         "reward/successful_grasp_dof_bonus": successful_grasp_dof_bonus,
         "reward/lift": lift_reward,
         "reward/object_pos": obj_pos_reward,
@@ -1089,6 +1100,7 @@ def compute_rewards(
         "metric/curriculum_progress": curriculum_progress,
         "metric/mid_curriculum": mid_curriculum,
         "metric/approach_phase": approach_phase,
+        "metric/frame0_approach_gate": frame0_approach_gate,
         "metric/grasp_phase": grasp_phase,
         "metric/manipulation_phase": manipulation_phase,
         "metric/no_contact_mano_gate": no_contact_mano_gate,
