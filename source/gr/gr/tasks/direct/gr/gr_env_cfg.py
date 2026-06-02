@@ -40,7 +40,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     asymmetric_obs = False
     
     # TODO: Match this dimension to the observation vector built in gr_env.py.
-    observation_space = 275
+    observation_space = 302
 
     # env
     decimation = 4
@@ -223,7 +223,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     anchor_obj_offset_reward_weight = 0.8
     hand_dof_reward_weight = 0.25
     hand_rot_reward_weight = 0.2
-    finger_shape_reward_weight = 0.25
+    finger_shape_reward_weight = 0.15
     fingertip_reward_weight = 0.4
     fingertip_obj_proximity_reward_weight = 0.75
     fingertip_obj_offset_reward_weight = 0.8
@@ -241,16 +241,17 @@ class GrEnvCfg(DirectRLEnvCfg):
     hand_rot_reward_scale = 2.0
     finger_shape_reward_scale = 25.0
     finger_direction_error_weight = 0.02
-    finger_shape_contact_decay = 0.25
+    finger_shape_contact_decay = 0.05
     anchor_rotation_gate_scale = 20.0
     fingertip_reward_scale = 40.0
     fingertip_obj_proximity_reward_scale = 8.0
     fingertip_obj_offset_reward_scale = 15.0
     proximity_gate_scale = 4.0
     object_reward_gate_base = 0.2
-    contact_force_reward_weight = 0.5
-    contact_count_reward_weight = 0.5
-    contact_sustain_reward_weight = 0.4
+    contact_force_reward_weight = 0.2
+    contact_count_reward_weight = 0.7
+    contact_sustain_reward_weight = 0.6
+    stable_grasp_reward_weight = 0.8
     transport_support_reward_weight = 1.0
     early_imitation_reward_bonus = 0.6
     early_episode_tracking_frames = 70.0
@@ -261,7 +262,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     manipulation_task_bonus = 0.6
     manipulation_imitation_bonus = 0.4
     successful_grasp_dof_bonus_weight = 0.25
-    frame0_approach_pose_bonus_weight = 0.35
+    pre_contact_pose_bonus_weight = 0.35
     no_contact_mano_imitation_floor = 0.25
     object_relative_reward_base = 0.35
     mid_object_relative_reward_bonus = 1.0

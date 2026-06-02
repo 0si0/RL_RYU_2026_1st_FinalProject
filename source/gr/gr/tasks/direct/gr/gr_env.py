@@ -72,6 +72,10 @@ class GrEnv(DirectRLEnv):
             (self.num_envs, 33 * len(self.cfg.lookahead_reference_steps)),
             device=self.device,
         )
+        self.object_lookahead_ref_obs = torch.zeros(
+            (self.num_envs, 9 * len(self.cfg.lookahead_reference_steps)),
+            device=self.device,
+        )
 
         # object parameters
         self.obj_pos = torch.zeros((self.num_envs, 3), device=self.device)
@@ -426,6 +430,7 @@ class GrEnv(DirectRLEnv):
             self.cfg.contact_force_reward_weight,
             self.cfg.contact_count_reward_weight,
             self.cfg.contact_sustain_reward_weight,
+            self.cfg.stable_grasp_reward_weight,
             self.cfg.transport_support_reward_weight,
             self.cfg.early_imitation_reward_bonus,
             self.cfg.early_episode_tracking_bonus,
@@ -435,7 +440,7 @@ class GrEnv(DirectRLEnv):
             self.cfg.manipulation_task_bonus,
             self.cfg.manipulation_imitation_bonus,
             self.cfg.successful_grasp_dof_bonus_weight,
-            self.cfg.frame0_approach_pose_bonus_weight,
+            self.cfg.pre_contact_pose_bonus_weight,
             self.cfg.no_contact_mano_imitation_floor,
             self.cfg.object_relative_reward_base,
             self.cfg.mid_object_relative_reward_bonus,
@@ -783,9 +788,23 @@ class GrEnv(DirectRLEnv):
             1.0,
         )
         self.proximity_gate = torch.exp(-self.cfg.proximity_gate_scale * self.fingertip_obj_topk_proximity_err)
+        phase_obj_pos_reward = torch.exp(-self.cfg.obj_pos_reward_scale * self.obj_pos_err)
+        phase_obj_rot_reward = torch.exp(-self.cfg.obj_rot_reward_scale * self.obj_rot_err)
+        phase_fingertip_obj_offset_reward = torch.exp(
+            -self.cfg.fingertip_obj_offset_reward_scale * self.fingertip_obj_offset_err
+        )
+        phase_contact_gate = torch.clamp(
+            self.num_contact_fingers / (self.cfg.target_contact_fingers + 1.0e-6),
+            0.0,
+            1.0,
+        )
+        phase_stable_grasp_gate = phase_contact_gate * torch.clamp(self.contact_sustain, 0.0, 1.0)
+        phase_reference_success = phase_stable_grasp_gate * phase_fingertip_obj_offset_reward * (
+            0.5 * phase_obj_pos_reward + 0.5 * phase_obj_rot_reward
+        )
         self.phase_success_score = torch.maximum(
             self.phase_success_score,
-            torch.clamp(self.contact_sustain, 0.0, 1.0),
+            torch.clamp(phase_reference_success, 0.0, 1.0),
         )
 
         self.palm_to_obj = self.hand_pos - self.obj_pos
@@ -821,6 +840,7 @@ class GrEnv(DirectRLEnv):
 
     def _compute_lookahead_observations(self):
         lookahead_parts = []
+        object_lookahead_parts = []
         for step in self.cfg.lookahead_reference_steps:
             t_future = torch.clamp(
                 self.episode_length_buf + int(step),
@@ -830,6 +850,9 @@ class GrEnv(DirectRLEnv):
             hand_pos_future = self.hand_pos_reset_base + hand_anchor_delta
             fingertip_pos_future = self.fingertip_pos_seq[t_future]
             fingertip_obj_offset_future = self.obj_fingertip_pos_seq_offset[t_future]
+            obj_pos_future = self.obj_pos_seq[t_future]
+            obj_rot_future = self.obj_rot_seq[t_future]
+            obj_rot_future_error_quat = quat_mul(self.obj_rot, quat_conjugate(obj_rot_future))
 
             lookahead_parts.extend(
                 (
@@ -838,8 +861,15 @@ class GrEnv(DirectRLEnv):
                     (fingertip_obj_offset_future - self.fingertip_to_obj).reshape(self.num_envs, -1),
                 )
             )
+            object_lookahead_parts.extend(
+                (
+                    obj_pos_future - self.obj_pos,
+                    quat_to_6d(obj_rot_future_error_quat),
+                )
+            )
 
         self.lookahead_ref_obs = torch.cat(lookahead_parts, dim=-1)
+        self.object_lookahead_ref_obs = torch.cat(object_lookahead_parts, dim=-1)
 
 
     def compute_full_observations(self):
@@ -860,6 +890,7 @@ class GrEnv(DirectRLEnv):
             self.hand_kpt_error.reshape(self.num_envs, -1),
             self.fingertip_to_obj.reshape(self.num_envs, -1),
             self.lookahead_ref_obs,
+            self.object_lookahead_ref_obs,
 
             self.obj_pos_error,
             quat_to_6d(self.obj_rot_error_quat),
@@ -949,6 +980,7 @@ def compute_rewards(
     contact_force_reward_weight: float,
     contact_count_reward_weight: float,
     contact_sustain_reward_weight: float,
+    stable_grasp_reward_weight: float,
     transport_support_reward_weight: float,
     early_imitation_reward_bonus: float,
     early_episode_tracking_bonus: float,
@@ -958,7 +990,7 @@ def compute_rewards(
     manipulation_task_bonus: float,
     manipulation_imitation_bonus: float,
     successful_grasp_dof_bonus_weight: float,
-    frame0_approach_pose_bonus_weight: float,
+    pre_contact_pose_bonus_weight: float,
     no_contact_mano_imitation_floor: float,
     object_relative_reward_base: float,
     mid_object_relative_reward_bonus: float,
@@ -1028,6 +1060,7 @@ def compute_rewards(
     contact_force_reward = torch.clamp(contact_force, 0.0, contact_reward_max_force) / (contact_reward_max_force + 1.0e-6)
     contact_count_reward = torch.clamp(num_contact_fingers / (target_contact_fingers + 1.0e-6), 0.0, 1.0)
     contact_sustain_reward = torch.clamp(contact_sustain, 0.0, 1.0)
+    stable_grasp_gate = contact_count_reward * contact_sustain_reward
     contact_reward = proximity_gate * (
         contact_force_reward_weight * contact_force_reward
         + contact_count_reward_weight * contact_count_reward
@@ -1037,16 +1070,20 @@ def compute_rewards(
     obj_rot_reward = torch.exp(-obj_rot_reward_scale * obj_rot_err)
     obj_vel_reward = torch.exp(-obj_vel_reward_scale * obj_vel_err)
     object_gate = object_reward_gate_base + (1.0 - object_reward_gate_base) * proximity_gate
-    contact_gate = torch.clamp(num_contact_fingers / (target_contact_fingers + 1.0e-6), 0.0, 1.0)
-    transport_support_reward = contact_gate * contact_sustain_reward * (
-        0.7 * obj_pos_reward
-        + 0.3 * fingertip_obj_offset_reward
+    stable_grasp_reward = stable_grasp_gate * fingertip_obj_offset_reward
+    transport_support_reward = stable_grasp_reward * (
+        0.45 * obj_pos_reward
+        + 0.35 * obj_rot_reward
+        + 0.20 * fingertip_obj_offset_reward
     )
     frame0_approach_gate = (start_frame_idx == 0).float() * approach_phase
     finger_shape_phase_scale = approach_phase + grasp_phase + finger_shape_contact_decay * manipulation_phase
-    frame0_approach_pose_bonus = frame0_approach_gate * (
-        0.5 * hand_dof_reward
-        + 0.5 * fingertip_reward
+    pre_contact_pose_gate = torch.clamp(1.0 - contact_sustain_reward, 0.0, 1.0)
+    pre_contact_pose_bonus = pre_contact_pose_gate * (
+        0.30 * hand_pos_reward
+        + 0.25 * hand_anchor_reward
+        + 0.20 * hand_rot_reward
+        + 0.25 * finger_shape_reward
     )
     successful_grasp_shape_reward = (
         0.5 * hand_dof_reward
@@ -1077,11 +1114,12 @@ def compute_rewards(
         + grasp_object_scale * fingertip_obj_proximity_weight * fingertip_obj_proximity_reward
         + grasp_object_scale * object_relative_scale * fingertip_obj_offset_weight * fingertip_obj_offset_reward
         + grasp_object_scale * task_scale * contact_weight * contact_reward
+        + grasp_object_scale * task_scale * stable_grasp_reward_weight * stable_grasp_reward
         + object_gate * obj_pos_weight * obj_pos_reward
         + object_gate * obj_rot_weight * obj_rot_reward
         + object_gate * obj_vel_weight * obj_vel_reward
         + task_scale * transport_support_reward_weight * transport_support_reward
-        + frame0_approach_pose_bonus_weight * frame0_approach_pose_bonus
+        + pre_contact_pose_bonus_weight * pre_contact_pose_bonus
         + successful_grasp_dof_bonus_weight * successful_grasp_shape_bonus
         + action_penalty_scale * action_penalty
         - no_grasp_rotation_penalty_weight * no_grasp_rotation_penalty
@@ -1107,8 +1145,9 @@ def compute_rewards(
         "reward/contact_force": contact_force_reward,
         "reward/contact_count": contact_count_reward,
         "reward/contact_sustain": contact_sustain_reward,
+        "reward/stable_grasp": stable_grasp_reward,
         "reward/transport_support": transport_support_reward,
-        "reward/frame0_approach_pose_bonus": frame0_approach_pose_bonus,
+        "reward/pre_contact_pose_bonus": pre_contact_pose_bonus,
         "reward/successful_grasp_shape_bonus": successful_grasp_shape_bonus,
         "reward/object_pos": obj_pos_reward,
         "reward/object_rot": obj_rot_reward,
@@ -1119,6 +1158,7 @@ def compute_rewards(
         "metric/mid_curriculum": mid_curriculum,
         "metric/approach_phase": approach_phase,
         "metric/frame0_approach_gate": frame0_approach_gate,
+        "metric/pre_contact_pose_gate": pre_contact_pose_gate,
         "metric/grasp_phase": grasp_phase,
         "metric/manipulation_phase": manipulation_phase,
         "metric/no_contact_mano_gate": no_contact_mano_gate,
@@ -1133,6 +1173,7 @@ def compute_rewards(
         "metric/anchor_rotation_gate": anchor_rotation_gate,
         "metric/anchor_object_gate": anchor_object_gate,
         "metric/late_contact_reward_gate": late_contact_reward_gate,
+        "metric/stable_grasp_gate": stable_grasp_gate,
         "metric/no_contact_sustain": no_contact_sustain,
         "metric/contact_fingers": num_contact_fingers,
         "metric/contact_sustain": contact_sustain_reward,
