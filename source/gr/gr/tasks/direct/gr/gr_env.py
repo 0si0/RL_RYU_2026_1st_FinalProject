@@ -1204,8 +1204,8 @@ def compute_rewards(
     )
     stable_grasp_gate = thumb_opposition_gate * non_thumb_contact_gate * force_balance_reward * contact_sustain_reward
     stable_grasp_score = contact_sustain_reward * (
-        0.35 * thumb_opposition_gate
-        + 0.35 * non_thumb_contact_gate
+        0.25 * thumb_opposition_gate
+        + 0.45 * non_thumb_contact_gate
         + 0.20 * contact_count_reward
         + 0.10 * force_balance_reward
     )
@@ -1231,11 +1231,31 @@ def compute_rewards(
     finger_shape_phase_scale = approach_phase + grasp_phase + finger_shape_contact_decay * manipulation_phase
     finger_topology_phase_scale = approach_phase + grasp_phase + finger_topology_contact_decay * manipulation_phase
     pre_contact_pose_gate = torch.clamp(1.0 - contact_sustain_reward, 0.0, 1.0)
-    pre_contact_pose_bonus = pre_contact_pose_gate * (
-        0.30 * hand_pos_reward
-        + 0.25 * hand_anchor_reward
-        + 0.20 * hand_rot_reward
+    approach_proximity_gate = pre_contact_pose_gate * proximity_gate
+    approach_proximity_shape_gate = 1.0 - approach_proximity_gate * (
+        1.0 - (0.5 + 0.5 * finger_shape_reward * finger_topology_reward)
+    )
+    fingertip_obj_proximity_reward = fingertip_obj_proximity_reward * approach_proximity_shape_gate
+    pre_contact_base_pose_bonus = (
+        0.20 * hand_pos_reward
+        + 0.20 * hand_anchor_reward
+        + 0.15 * hand_rot_reward
         + 0.25 * finger_shape_reward
+        + 0.15 * finger_topology_reward
+        + 0.05 * fingertip_reward
+    )
+    pre_contact_near_pose_bonus = (
+        0.10 * hand_pos_reward
+        + 0.10 * hand_anchor_reward
+        + 0.10 * hand_rot_reward
+        + 0.35 * finger_shape_reward
+        + 0.25 * finger_topology_reward
+        + 0.10 * fingertip_reward
+    )
+    pre_contact_near_shape_mix = 0.35 * proximity_gate
+    pre_contact_pose_bonus = pre_contact_pose_gate * (
+        (1.0 - pre_contact_near_shape_mix) * pre_contact_base_pose_bonus
+        + pre_contact_near_shape_mix * pre_contact_near_pose_bonus
     )
     object_relative_quality_gate = (
         0.25 * proximity_gate
@@ -1359,6 +1379,7 @@ def compute_rewards(
         "metric/non_thumb_contact_gate": non_thumb_contact_gate,
         "metric/force_balance": force_balance_reward,
         "metric/force_dominance": force_dominance,
+        "metric/approach_proximity_shape_gate": approach_proximity_shape_gate,
         "metric/object_relative_quality_gate": object_relative_quality_gate,
         "metric/no_contact_sustain": no_contact_sustain,
         "metric/contact_fingers": num_contact_fingers,
