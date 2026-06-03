@@ -258,6 +258,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     stable_grasp_reward_weight = 0.8
     transport_support_reward_weight = 1.0
     obj_future_dir_reward_weight = 0.15
+    grasped_hand_ref_reward_weight = 0.6
     early_imitation_reward_bonus = 0.6
     early_episode_tracking_frames = 70.0
     early_episode_tracking_bonus = 0.8
@@ -286,6 +287,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     contact_topk_fingers = 3
     contact_sustain_target_steps = 8.0
     obj_pos_reward_scale = 20.0
+    obj_delta_reward_scale = 20.0
     obj_rot_reward_scale = 2.0
     obj_vel_reward_scale = 2.0
     obj_angvel_reward_scale = 0.2
