@@ -58,6 +58,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     MANO_kpts_except_fingertips = [0, 1, 2, 3, 5, 6, 7, 9, 10, 11, 13, 14, 15, 17, 18, 19]
     MANO_fingertips = [4, 8, 12, 16, 20]
     MANO_finger_joint_groups = ((1, 2, 3, 4), (5, 6, 7, 8), (9, 10, 11, 12), (13, 14, 15, 16), (17, 18, 19, 20))
+    MANO_topology_joints = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20)
     MANO_rigids = [0, 5, 9, 13]
     MANO_anchors = [0, 5, 9, 13, 17]
     lookahead_reference_steps = (1, 5, 10)
@@ -224,6 +225,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     hand_dof_reward_weight = 0.25
     hand_rot_reward_weight = 0.2
     finger_shape_reward_weight = 0.15
+    finger_topology_reward_weight = 0.35
     fingertip_reward_weight = 0.4
     fingertip_obj_proximity_reward_weight = 0.75
     fingertip_obj_offset_reward_weight = 0.8
@@ -240,8 +242,10 @@ class GrEnvCfg(DirectRLEnvCfg):
     hand_dof_reward_scale = 4.0
     hand_rot_reward_scale = 2.0
     finger_shape_reward_scale = 25.0
+    finger_topology_reward_scale = 25.0
     finger_direction_error_weight = 0.02
     finger_shape_contact_decay = 0.05
+    finger_topology_contact_decay = 0.30
     anchor_rotation_gate_scale = 20.0
     fingertip_reward_scale = 40.0
     fingertip_obj_proximity_reward_scale = 8.0
@@ -253,6 +257,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     contact_sustain_reward_weight = 0.6
     stable_grasp_reward_weight = 0.8
     transport_support_reward_weight = 1.0
+    obj_future_dir_reward_weight = 0.15
     early_imitation_reward_bonus = 0.6
     early_episode_tracking_frames = 70.0
     early_episode_tracking_bonus = 0.8
@@ -275,6 +280,9 @@ class GrEnvCfg(DirectRLEnvCfg):
     contact_force_threshold = 0.005
     target_contact_fingers = 3.0
     contact_reward_max_force = 0.2
+    force_dominance_limit = 0.65
+    reference_contact_proximity_scale = 20.0
+    obj_future_dir_min_distance = 0.02
     contact_topk_fingers = 3
     contact_sustain_target_steps = 8.0
     obj_pos_reward_scale = 20.0
