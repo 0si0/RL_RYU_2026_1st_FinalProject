@@ -1193,10 +1193,10 @@ def compute_rewards(
     stable_grasp_reward = stable_grasp_gate * finger_topology_reward * fingertip_obj_offset_reward
     transport_gate = 0.20 * contact_sustain_reward + 0.80 * stable_grasp_gate
     transport_support_reward = transport_gate * finger_topology_reward * (
-        0.35 * obj_pos_reward
-        + 0.30 * obj_delta_reward
-        + 0.25 * obj_rot_reward
-        + 0.10 * obj_future_dir_reward
+        0.45 * obj_pos_reward
+        + 0.35 * obj_delta_reward
+        + 0.15 * obj_rot_reward
+        + 0.05 * obj_future_dir_reward
     )
     frame0_approach_gate = (start_frame_idx == 0).float() * approach_phase
     finger_shape_phase_scale = approach_phase + grasp_phase + finger_shape_contact_decay * manipulation_phase

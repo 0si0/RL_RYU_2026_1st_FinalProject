@@ -261,7 +261,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     stable_grasp_reward_weight = 0.8
     transport_support_reward_weight = 1.0
     obj_future_dir_reward_weight = 0.15
-    grasped_hand_ref_reward_weight = 0.6
+    grasped_hand_ref_reward_weight = 0.9
     early_imitation_reward_bonus = 0.6
     early_episode_tracking_frames = 70.0
     early_episode_tracking_bonus = 0.8
