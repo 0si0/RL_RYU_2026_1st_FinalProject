@@ -1241,7 +1241,7 @@ def compute_rewards(
         0.25 * proximity_gate
         + 0.75 * stable_grasp_score * finger_topology_reward * obj_rot_reward
     )
-    grasped_hand_ref_reward = manipulation_phase * finger_topology_reward * (
+    grasped_hand_ref_reward = stable_grasp_score * finger_topology_reward * (
         0.35 * hand_pos_reward
         + 0.25 * hand_anchor_reward
         + 0.25 * hand_rot_reward
