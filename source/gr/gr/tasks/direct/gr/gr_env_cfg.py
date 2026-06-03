@@ -243,6 +243,9 @@ class GrEnvCfg(DirectRLEnvCfg):
     hand_rot_reward_scale = 2.0
     finger_shape_reward_scale = 25.0
     finger_topology_reward_scale = 25.0
+    finger_spread_reward_scale = 35.0
+    finger_spread_collapse_margin = 0.0075
+    finger_spread_min_ref_distance = 0.015
     finger_direction_error_weight = 0.02
     finger_shape_contact_decay = 0.05
     finger_topology_contact_decay = 0.30
@@ -268,6 +271,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     manipulation_task_bonus = 0.6
     manipulation_imitation_bonus = 0.4
     successful_grasp_dof_bonus_weight = 0.25
+    successful_grasp_spread_bonus_mix = 0.15
     pre_contact_pose_bonus_weight = 0.35
     no_contact_mano_imitation_floor = 0.25
     object_relative_reward_base = 0.35
