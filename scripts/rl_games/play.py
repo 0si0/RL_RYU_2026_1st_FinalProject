@@ -204,6 +204,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # initialize RNN states if used
     if agent.is_rnn:
         agent.init_rnn()
+    metric_sums = {
+        "hand_kpt_err": 0.0,
+        "object_pos_err": 0.0,
+        "object_rot_err": 0.0,
+        "contact_fingers": 0.0,
+        "contact_sustain": 0.0,
+    }
+    metric_steps = 0
     # simulate environment
     # note: We simplified the logic in rl-games player.py (:func:`BasePlayer.run()`) function in an
     #   attempt to have complete control over environment stepping. However, this removes other
@@ -218,6 +226,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             actions = agent.get_action(obs, is_deterministic=agent.is_deterministic)
             # env stepping
             obs, _, dones, _ = env.step(actions)
+            base_env = env.unwrapped
+            if all(hasattr(base_env, name) for name in ("hand_kpt_err", "obj_pos_err", "obj_rot_err")):
+                metric_sums["hand_kpt_err"] += float(base_env.hand_kpt_err.mean().item())
+                metric_sums["object_pos_err"] += float(base_env.obj_pos_err.mean().item())
+                metric_sums["object_rot_err"] += float(base_env.obj_rot_err.mean().item())
+                metric_sums["contact_fingers"] += float(base_env.num_contact_fingers.mean().item())
+                metric_sums["contact_sustain"] += float(base_env.contact_sustain.mean().item())
+                metric_steps += 1
 
             # perform operations for terminated episodes
             if len(dones) > 0:
@@ -235,6 +251,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         sleep_time = dt - (time.time() - start_time)
         if args_cli.real_time and sleep_time > 0:
             time.sleep(sleep_time)
+
+    if metric_steps > 0:
+        print("[METRIC] Fixed play metrics averaged over rollout:")
+        for name, value in metric_sums.items():
+            print(f"[METRIC] {name}: {value / metric_steps:.6f}")
 
     # close the simulator
     env.close()

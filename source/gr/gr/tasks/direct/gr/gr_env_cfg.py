@@ -222,7 +222,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     hand_anchor_reward_weight = 0.6
     hand_obj_offset_reward_weight = 0.6
     anchor_obj_offset_reward_weight = 0.8
-    hand_dof_reward_weight = 0.25
+    hand_dof_reward_weight = 0.12
     hand_rot_reward_weight = 0.2
     finger_shape_reward_weight = 0.15
     finger_topology_reward_weight = 0.35
@@ -254,7 +254,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     fingertip_obj_proximity_reward_scale = 8.0
     fingertip_obj_offset_reward_scale = 15.0
     proximity_gate_scale = 4.0
-    object_reward_gate_base = 0.05
+    object_reward_gate_base = 0.02
     contact_force_reward_weight = 0.2
     contact_count_reward_weight = 0.7
     contact_sustain_reward_weight = 0.6
@@ -262,6 +262,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     transport_support_reward_weight = 1.0
     obj_future_dir_reward_weight = 0.15
     grasped_hand_ref_reward_weight = 0.6
+    task_tracking_reward_weight = 0.9
     early_imitation_reward_bonus = 0.6
     early_episode_tracking_frames = 70.0
     early_episode_tracking_bonus = 0.8
@@ -290,6 +291,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     obj_future_dir_min_distance = 0.02
     contact_topk_fingers = 3
     contact_sustain_target_steps = 8.0
+    reset_object_reference_velocity_scale = 0.0
     obj_pos_reward_scale = 20.0
     obj_delta_reward_scale = 20.0
     obj_rot_reward_scale = 2.0
@@ -304,8 +306,11 @@ class GrEnvCfg(DirectRLEnvCfg):
     no_grasp_terminate_grace_steps = 70.0
     random_reference_phase_sampling = True
     reference_phase_min_remaining_steps = 45
-    reference_phase_frame0_ratio = 0.60
+    reference_phase_frame0_ratio = 0.50
+    reference_phase_frame0_ratio_start = 0.85
+    reference_phase_uniform_ratio_start = 0.10
     reference_phase_uniform_ratio = 0.30
+    reference_phase_curriculum_steps = 60000
     success_biased_phase_sampling = True
     success_phase_weight_decay = 0.995
     success_phase_weight_gain = 0.2

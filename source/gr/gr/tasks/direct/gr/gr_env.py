@@ -456,6 +456,7 @@ class GrEnv(DirectRLEnv):
             self.cfg.transport_support_reward_weight,
             self.cfg.obj_future_dir_reward_weight,
             self.cfg.grasped_hand_ref_reward_weight,
+            self.cfg.task_tracking_reward_weight,
             self.cfg.early_imitation_reward_bonus,
             self.cfg.early_episode_tracking_bonus,
             self.cfg.early_lag_penalty_weight,
@@ -545,8 +546,22 @@ class GrEnv(DirectRLEnv):
             biased_frames = uniform_frames
 
         phase_sample = torch.rand(num_envs, device=self.device)
-        frame0_cutoff = self.cfg.reference_phase_frame0_ratio
-        uniform_cutoff = frame0_cutoff + self.cfg.reference_phase_uniform_ratio
+        phase_curriculum = float(
+            np.clip(
+                getattr(self, "common_step_counter", 0) / max(1, self.cfg.reference_phase_curriculum_steps),
+                0.0,
+                1.0,
+            )
+        )
+        frame0_cutoff = (
+            (1.0 - phase_curriculum) * self.cfg.reference_phase_frame0_ratio_start
+            + phase_curriculum * self.cfg.reference_phase_frame0_ratio
+        )
+        uniform_ratio = (
+            (1.0 - phase_curriculum) * self.cfg.reference_phase_uniform_ratio_start
+            + phase_curriculum * self.cfg.reference_phase_uniform_ratio
+        )
+        uniform_cutoff = min(frame0_cutoff + uniform_ratio, 1.0)
         sampled_frames = torch.where(
             phase_sample < frame0_cutoff,
             zero_frames,
@@ -597,7 +612,11 @@ class GrEnv(DirectRLEnv):
         frame_ids = self.start_frame_idx[env_ids].long()
         self.obj_pos_reset[env_ids] = self.obj_pos_seq[frame_ids]
         self.obj_rot_reset[env_ids] = self.obj_rot_seq[frame_ids]
-        obj_vel = torch.cat((self.obj_linvel_seq[frame_ids], self.obj_angvel_seq[frame_ids]), dim=-1)
+        reset_velocity_scale = self.cfg.reset_object_reference_velocity_scale
+        if reset_velocity_scale > 0.0:
+            obj_vel = reset_velocity_scale * torch.cat((self.obj_linvel_seq[frame_ids], self.obj_angvel_seq[frame_ids]), dim=-1)
+        else:
+            obj_vel = torch.zeros((len(env_ids), 6), device=self.device)
         self._set_object_state(self.obj_pos_reset[env_ids], self.obj_rot_reset[env_ids], env_ids, obj_vel)
 
 
@@ -1087,6 +1106,7 @@ def compute_rewards(
     transport_support_reward_weight: float,
     obj_future_dir_reward_weight: float,
     grasped_hand_ref_reward_weight: float,
+    task_tracking_reward_weight: float,
     early_imitation_reward_bonus: float,
     early_episode_tracking_bonus: float,
     early_lag_penalty_weight: float,
@@ -1261,6 +1281,37 @@ def compute_rewards(
         0.25 * proximity_gate
         + 0.75 * stable_grasp_score * finger_topology_reward * obj_rot_reward
     )
+    grading_object_score = 0.55 * obj_pos_reward + 0.45 * obj_rot_reward
+    grading_hand_score = (
+        0.45 * hand_reward
+        + 0.25 * hand_anchor_reward
+        + 0.15 * hand_rot_reward
+        + 0.15 * fingertip_reward
+    )
+    grading_contact_score = torch.clamp(transport_gate, 0.0, 1.0)
+    grading_proxy_score = (
+        0.45 * grading_object_score
+        + 0.35 * grading_hand_score
+        + 0.20 * grading_contact_score
+    )
+    task_tracking_gate = approach_phase + (1.0 - approach_phase) * (0.20 + 0.80 * transport_gate)
+    object_tracking_reward = (
+        0.45 * obj_pos_reward
+        + 0.35 * obj_delta_reward
+        + 0.20 * obj_rot_reward
+    )
+    hand_tracking_reward = (
+        0.30 * hand_reward
+        + 0.25 * hand_anchor_reward
+        + 0.20 * hand_rot_reward
+        + 0.15 * finger_topology_reward
+        + 0.10 * fingertip_reward
+    )
+    task_tracking_reward = task_tracking_gate * (
+        0.60 * object_tracking_reward
+        + 0.25 * hand_tracking_reward
+        + 0.15 * fingertip_obj_offset_reward
+    )
     grasped_hand_ref_reward = stable_grasp_score * finger_topology_reward * (
         0.35 * hand_pos_reward
         + 0.25 * hand_anchor_reward
@@ -1311,6 +1362,7 @@ def compute_rewards(
         + task_scale * transport_support_reward_weight * transport_support_reward
         + task_scale * obj_future_dir_reward_weight * stable_grasp_score * obj_future_dir_reward
         + task_scale * grasped_hand_ref_reward_weight * grasped_hand_ref_reward
+        + task_scale * task_tracking_reward_weight * task_tracking_reward
         + pre_contact_pose_bonus_weight * pre_contact_pose_bonus
         + successful_grasp_dof_bonus_weight * successful_grasp_shape_bonus
         + action_penalty_scale * action_penalty
@@ -1343,6 +1395,9 @@ def compute_rewards(
         "reward/stable_grasp": stable_grasp_reward,
         "reward/transport_support": transport_support_reward,
         "reward/object_future_dir": obj_future_dir_reward,
+        "reward/object_tracking": object_tracking_reward,
+        "reward/hand_tracking": hand_tracking_reward,
+        "reward/task_tracking": task_tracking_reward,
         "reward/pre_contact_pose_bonus": pre_contact_pose_bonus,
         "reward/successful_grasp_shape_bonus": successful_grasp_shape_bonus,
         "reward/object_pos": obj_pos_reward,
@@ -1350,6 +1405,10 @@ def compute_rewards(
         "reward/object_rot": obj_rot_reward,
         "reward/object_vel": obj_vel_reward,
         "reward/grasped_hand_ref": grasped_hand_ref_reward,
+        "score/grading_proxy": grading_proxy_score,
+        "score/object_pose": grading_object_score,
+        "score/hand_motion": grading_hand_score,
+        "score/contact_transport": grading_contact_score,
         "metric/proximity_gate": proximity_gate,
         "metric/object_gate": object_gate,
         "metric/curriculum_progress": curriculum_progress,
@@ -1375,6 +1434,7 @@ def compute_rewards(
         "metric/stable_grasp_gate": stable_grasp_gate,
         "metric/stable_grasp_score": stable_grasp_score,
         "metric/transport_gate": transport_gate,
+        "metric/task_tracking_gate": task_tracking_gate,
         "metric/thumb_opposition_gate": thumb_opposition_gate,
         "metric/non_thumb_contact_gate": non_thumb_contact_gate,
         "metric/force_balance": force_balance_reward,
@@ -1444,30 +1504,79 @@ def build_mano_to_shadow_dof_seq(
     little_bends = chain_bends(little)
     thumb_bends = chain_bends(thumb)
 
-    zero = torch.zeros(seq_len, device=mano_kpts_pos_seq.device)
-    actuated_norm = (
-        zero,
+    wrist = mano_kpts_pos_seq[:, 0]
+    palm_x = F.normalize(index[:, 1] - little[:, 1], dim=-1, eps=1.0e-6)
+    palm_y_hint = F.normalize(middle[:, 1] - wrist, dim=-1, eps=1.0e-6)
+    palm_z = F.normalize(torch.cross(palm_x, palm_y_hint, dim=-1), dim=-1, eps=1.0e-6)
+    palm_y = F.normalize(torch.cross(palm_z, palm_x, dim=-1), dim=-1, eps=1.0e-6)
+
+    def finger_spread(chain: torch.Tensor) -> torch.Tensor:
+        proximal_dir = F.normalize(chain[:, 1] - wrist, dim=-1, eps=1.0e-6)
+        spread_angle = torch.atan2(
+            (proximal_dir * palm_x).sum(dim=-1),
+            (proximal_dir * palm_y).sum(dim=-1),
+        )
+        return torch.clamp(spread_angle / (0.35 * torch.pi), -1.0, 1.0)
+
+    thumb_dir = F.normalize(thumb[:, 2] - thumb[:, 1], dim=-1, eps=1.0e-6)
+    thumb_tip_dir = F.normalize(thumb[:, 4] - thumb[:, 1], dim=-1, eps=1.0e-6)
+    thumb_abduction = torch.clamp(
+        torch.atan2((thumb_dir * palm_x).sum(dim=-1), (thumb_dir * palm_y).sum(dim=-1))
+        / (0.50 * torch.pi),
+        -1.0,
+        1.0,
+    )
+    thumb_opposition = torch.clamp((thumb_tip_dir * palm_z).sum(dim=-1), -1.0, 1.0)
+
+    flexion_norm = (
         index_bends[0],
-        0.5 * (index_bends[1] + index_bends[2]),
-        zero,
+        index_bends[1],
+        index_bends[2],
         middle_bends[0],
-        0.5 * (middle_bends[1] + middle_bends[2]),
-        zero,
+        middle_bends[1],
+        middle_bends[2],
         ring_bends[0],
-        0.5 * (ring_bends[1] + ring_bends[2]),
-        zero,
-        zero,
+        ring_bends[1],
+        ring_bends[2],
         little_bends[0],
-        0.5 * (little_bends[1] + little_bends[2]),
-        zero,
+        little_bends[1],
+        little_bends[2],
         thumb_bends[0],
-        zero,
         thumb_bends[1],
         thumb_bends[2],
     )
-
-    for value, dof_id in zip(actuated_norm, actuated_dof_indices):
+    flexion_ids = (
+        actuated_dof_indices[0],
+        actuated_dof_indices[1],
+        actuated_dof_indices[2],
+        actuated_dof_indices[3],
+        actuated_dof_indices[4],
+        actuated_dof_indices[5],
+        actuated_dof_indices[6],
+        actuated_dof_indices[7],
+        actuated_dof_indices[8],
+        actuated_dof_indices[10],
+        actuated_dof_indices[11],
+        actuated_dof_indices[12],
+        actuated_dof_indices[14],
+        actuated_dof_indices[16],
+        actuated_dof_indices[17],
+    )
+    for value, dof_id in zip(flexion_norm, flexion_ids):
         dof_seq[:, dof_id] = flexion_target(value, dof_lower_limits[dof_id], dof_upper_limits[dof_id])
+
+    signed_norm = (
+        finger_spread(little),
+        thumb_abduction,
+        thumb_opposition,
+    )
+    signed_ids = (
+        actuated_dof_indices[9],
+        actuated_dof_indices[13],
+        actuated_dof_indices[15],
+    )
+    for value, dof_id in zip(signed_norm, signed_ids):
+        dof_seq[:, dof_id] = signed_joint_target(value, dof_lower_limits[dof_id], dof_upper_limits[dof_id])
 
     return dof_seq
 
@@ -1489,6 +1598,19 @@ def flexion_target(norm_value: torch.Tensor, lower: torch.Tensor, upper: torch.T
         target = norm_value * upper
     else:
         target = lower + norm_value * (upper - lower)
+    return torch.minimum(torch.maximum(target, lower), upper)
+
+
+def signed_joint_target(norm_value: torch.Tensor, lower: torch.Tensor, upper: torch.Tensor) -> torch.Tensor:
+    norm_value = torch.clamp(norm_value, -1.0, 1.0)
+    lower_value = lower.item()
+    upper_value = upper.item()
+    if lower_value < 0.0 < upper_value:
+        target = torch.where(norm_value >= 0.0, norm_value * upper, -norm_value * lower)
+    elif upper_value <= 0.0 and lower_value < 0.0:
+        target = torch.abs(norm_value) * lower
+    else:
+        target = torch.abs(norm_value) * upper
     return torch.minimum(torch.maximum(target, lower), upper)
 
 
