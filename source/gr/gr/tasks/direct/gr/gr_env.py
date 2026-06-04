@@ -1218,6 +1218,9 @@ def compute_rewards(
     obj_delta_reward = torch.exp(-obj_delta_reward_scale * obj_delta_err)
     obj_rot_reward = torch.exp(-obj_rot_reward_scale * obj_rot_err)
     obj_vel_reward = torch.exp(-obj_vel_reward_scale * obj_vel_err)
+    object_ref_quality = 0.45 * obj_pos_reward + 0.35 * obj_delta_reward + 0.20 * obj_rot_reward
+    post_grasp_contact_gate = 1.0 - manipulation_phase * stable_grasp_score * (1.0 - (0.50 + 0.50 * object_ref_quality))
+    contact_reward = contact_reward * post_grasp_contact_gate
     stable_grasp_reward = stable_grasp_score * finger_topology_reward * fingertip_obj_offset_reward
     transport_gate = 0.20 * contact_sustain_reward + 0.80 * stable_grasp_score
     object_gate = object_reward_gate_base + (1.0 - object_reward_gate_base) * transport_gate
