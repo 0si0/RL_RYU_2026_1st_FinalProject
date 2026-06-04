@@ -876,8 +876,8 @@ class GrEnv(DirectRLEnv):
             * phase_contact_sustain
         )
         phase_stable_grasp_score = phase_contact_sustain * (
-            0.25 * phase_thumb_gate
-            + 0.45 * phase_non_thumb_gate
+            0.35 * phase_thumb_gate
+            + 0.35 * phase_non_thumb_gate
             + 0.20 * phase_contact_count
             + 0.10 * phase_force_balance
         )
