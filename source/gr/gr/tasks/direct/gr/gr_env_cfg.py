@@ -230,10 +230,6 @@ class GrEnvCfg(DirectRLEnvCfg):
     fingertip_obj_proximity_reward_weight = 0.75
     fingertip_obj_offset_reward_weight = 0.8
     reference_side_direction_reward_weight = 1.35
-    object_grasp_anchor_reward_weight = 0.65
-    object_grasp_compact_reward_weight = 0.55
-    contact_motion_support_reward_weight = 0.45
-    pre_lift_grasp_readiness_reward_weight = 0.45
     contact_reward_weight = 1.5
     obj_pos_reward_weight = 2.0
     obj_rot_reward_weight = 1.0
@@ -261,14 +257,6 @@ class GrEnvCfg(DirectRLEnvCfg):
     reference_side_direction_worst_mix = 0.35
     reference_side_direction_weight_floor = 0.45
     reference_side_direction_manipulation_floor = 0.35
-    object_grasp_anchor_reward_scale = 12.0
-    object_grasp_compact_reward_scale = 28.0
-    object_grasp_compact_radius_margin = 0.008
-    object_grasp_compact_worst_mix = 0.45
-    object_grasp_compact_softmax_scale = 10.0
-    object_grasp_axis_reward_scale = 3.0
-    object_grasp_anchor_axis_mix = 0.20
-    object_grasp_anchor_weight_floor = 0.35
     fingertip_obj_offset_reward_scale = 15.0
     proximity_gate_scale = 4.0
     object_reward_gate_base = 0.02
