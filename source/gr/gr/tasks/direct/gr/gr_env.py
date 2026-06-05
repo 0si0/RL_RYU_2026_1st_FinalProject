@@ -450,6 +450,9 @@ class GrEnv(DirectRLEnv):
             self.cfg.fingertip_reward_scale,
             self.cfg.fingertip_obj_proximity_reward_scale,
             self.cfg.reference_side_direction_reward_scale,
+            self.cfg.reference_side_direction_worst_mix,
+            self.cfg.reference_side_direction_weight_floor,
+            self.cfg.reference_side_direction_manipulation_floor,
             self.cfg.fingertip_obj_offset_reward_scale,
             self.cfg.object_reward_gate_base,
             self.cfg.contact_force_reward_weight,
@@ -745,6 +748,31 @@ class GrEnv(DirectRLEnv):
         self.fingertip_contact_forces_buf[:, 1] = self.fingertip_contact_force_norm
 
 
+    def _compute_finger_local_object_dirs(self, hand_kpts_pos: torch.Tensor, obj_pos: torch.Tensor) -> torch.Tensor:
+        finger_kpts = hand_kpts_pos[:, self.finger_joint_groups]
+        finger_base = finger_kpts[:, :, 0]
+        finger_tip = finger_kpts[:, :, -1]
+        finger_axis = F.normalize(finger_tip - finger_base, dim=-1, eps=1.0e-6)
+
+        anchor_center = hand_kpts_pos[:, self.cfg.MANO_anchors].mean(dim=1).unsqueeze(1)
+        spread_axis = finger_base - anchor_center
+        spread_axis = spread_axis - (spread_axis * finger_axis).sum(dim=-1, keepdim=True) * finger_axis
+        spread_axis = F.normalize(spread_axis, dim=-1, eps=1.0e-6)
+
+        palm_axis = F.normalize(torch.cross(finger_axis, spread_axis, dim=-1), dim=-1, eps=1.0e-6)
+        spread_axis = F.normalize(torch.cross(palm_axis, finger_axis, dim=-1), dim=-1, eps=1.0e-6)
+
+        obj_from_tip_dir = F.normalize(obj_pos.unsqueeze(1) - finger_tip, dim=-1, eps=1.0e-6)
+        obj_dir_local = torch.stack(
+            (
+                (obj_from_tip_dir * finger_axis).sum(dim=-1),
+                (obj_from_tip_dir * spread_axis).sum(dim=-1),
+                (obj_from_tip_dir * palm_axis).sum(dim=-1),
+            ),
+            dim=-1,
+        )
+        return F.normalize(obj_dir_local, dim=-1, eps=1.0e-6)
+
 
     def _compute_intermediate_values(self):
         self._collect_target()
@@ -832,18 +860,18 @@ class GrEnv(DirectRLEnv):
         ).values.mean(dim=-1)
         self.fingertip_obj_offset_error = self.fingertip_to_obj - self.obj_fingertip_pos_ref_offset
         self.fingertip_obj_offset_err = torch.norm(self.fingertip_obj_offset_error, p=2, dim=-1).mean(dim=-1)
-        cur_obj_from_fingertip_dir = F.normalize(-self.fingertip_to_obj, dim=-1, eps=1.0e-6)
-        ref_obj_from_fingertip_dir = F.normalize(-self.obj_fingertip_pos_ref_offset, dim=-1, eps=1.0e-6)
-        cur_hand_inv_rot = quat_conjugate(self.hand_rot).unsqueeze(1).expand(-1, self.num_fingertips, -1)
-        ref_hand_inv_rot = quat_conjugate(self.hand_rot_ref).unsqueeze(1).expand(-1, self.num_fingertips, -1)
-        self.fingertip_obj_dir_local = quat_apply(cur_hand_inv_rot, cur_obj_from_fingertip_dir)
-        self.ref_fingertip_obj_dir_local = quat_apply(ref_hand_inv_rot, ref_obj_from_fingertip_dir)
-        self.fingertip_obj_ref_side_dir_error = self.fingertip_obj_dir_local - self.ref_fingertip_obj_dir_local
-        self.fingertip_obj_ref_side_dir_err = torch.norm(
-            self.fingertip_obj_ref_side_dir_error,
-            p=2,
-            dim=-1,
+        self.fingertip_obj_dir_local = self._compute_finger_local_object_dirs(self.hand_kpts_pos, self.obj_pos)
+        self.ref_fingertip_obj_dir_local = self._compute_finger_local_object_dirs(
+            self.mano_kpts_pos_ref,
+            self.obj_pos_ref,
         )
+        self.fingertip_obj_ref_side_dir_error = self.fingertip_obj_dir_local - self.ref_fingertip_obj_dir_local
+        self.fingertip_obj_ref_side_dir_cos = torch.clamp(
+            (self.fingertip_obj_dir_local * self.ref_fingertip_obj_dir_local).sum(dim=-1),
+            -1.0,
+            1.0,
+        )
+        self.fingertip_obj_ref_side_dir_err = 1.0 - self.fingertip_obj_ref_side_dir_cos
         ref_fingertip_obj_dist = torch.norm(self.obj_fingertip_pos_ref_offset, p=2, dim=-1)
         ref_dist_min = ref_fingertip_obj_dist.min(dim=-1, keepdim=True).values
         self.ref_fingertip_contact_weights = torch.exp(
@@ -1116,6 +1144,9 @@ def compute_rewards(
     fingertip_reward_scale: float,
     fingertip_obj_proximity_reward_scale: float,
     reference_side_direction_reward_scale: float,
+    reference_side_direction_worst_mix: float,
+    reference_side_direction_weight_floor: float,
+    reference_side_direction_manipulation_floor: float,
     fingertip_obj_offset_reward_scale: float,
     object_reward_gate_base: float,
     contact_force_reward_weight: float,
@@ -1214,12 +1245,26 @@ def compute_rewards(
     ref_contact_fingertip_obj_proximity_reward = torch.exp(
         -fingertip_obj_proximity_reward_scale * ref_contact_fingertip_obj_proximity_err
     )
-    reference_side_direction_err = (
-        ref_fingertip_contact_weights * fingertip_obj_ref_side_dir_err
-    ).sum(dim=-1) / ref_contact_weight_sum
-    reference_side_direction_reward = torch.exp(
-        -reference_side_direction_reward_scale * reference_side_direction_err
+    reference_side_direction_weights = (
+        reference_side_direction_weight_floor
+        + (1.0 - reference_side_direction_weight_floor) * ref_fingertip_contact_weights
     )
+    reference_side_direction_weight_sum = reference_side_direction_weights.sum(dim=-1).clamp_min(1.0e-6)
+    reference_side_direction_mean_err = (
+        reference_side_direction_weights * fingertip_obj_ref_side_dir_err
+    ).sum(dim=-1) / reference_side_direction_weight_sum
+    reference_side_direction_worst_weights = torch.softmax(
+        6.0 * reference_side_direction_weights * fingertip_obj_ref_side_dir_err,
+        dim=-1,
+    )
+    reference_side_direction_worst_err = (
+        reference_side_direction_worst_weights * fingertip_obj_ref_side_dir_err
+    ).sum(dim=-1)
+    reference_side_direction_err = (
+        (1.0 - reference_side_direction_worst_mix) * reference_side_direction_mean_err
+        + reference_side_direction_worst_mix * reference_side_direction_worst_err
+    )
+    reference_side_direction_reward = torch.exp(-reference_side_direction_reward_scale * reference_side_direction_err)
     fingertip_obj_proximity_reward = (
         0.35 * topk_fingertip_obj_proximity_reward
         + 0.65 * ref_contact_fingertip_obj_proximity_reward
@@ -1276,7 +1321,14 @@ def compute_rewards(
     finger_shape_phase_scale = approach_phase + grasp_phase + finger_shape_contact_decay * manipulation_phase
     finger_topology_phase_scale = approach_phase + grasp_phase + finger_topology_contact_decay * manipulation_phase
     pre_contact_pose_gate = torch.clamp(1.0 - contact_sustain_reward, 0.0, 1.0)
-    reference_side_direction_gate = pre_contact_pose_gate * (0.35 + 0.65 * proximity_gate)
+    reference_side_direction_phase = torch.clamp(
+        approach_phase
+        + torch.clamp(grasp_phase, 0.0, 1.0)
+        + reference_side_direction_manipulation_floor * contact_sustain_reward,
+        0.0,
+        1.0,
+    )
+    reference_side_direction_gate = reference_side_direction_phase * (0.45 + 0.55 * proximity_gate)
     approach_proximity_gate = pre_contact_pose_gate * proximity_gate
     approach_proximity_shape_gate = 1.0 - approach_proximity_gate * (
         1.0 - (0.5 + 0.5 * finger_shape_reward * finger_topology_reward)
@@ -1444,6 +1496,7 @@ def compute_rewards(
         "metric/approach_phase": approach_phase,
         "metric/frame0_approach_gate": frame0_approach_gate,
         "metric/pre_contact_pose_gate": pre_contact_pose_gate,
+        "metric/reference_side_direction_phase": reference_side_direction_phase,
         "metric/reference_side_direction_gate": reference_side_direction_gate,
         "metric/grasp_phase": grasp_phase,
         "metric/manipulation_phase": manipulation_phase,
@@ -1492,6 +1545,8 @@ def compute_rewards(
         "error/fingertip_obj_proximity_topk": fingertip_obj_topk_proximity_err,
         "error/fingertip_obj_offset": fingertip_obj_offset_err,
         "error/reference_side_direction": reference_side_direction_err,
+        "error/reference_side_direction_mean": reference_side_direction_mean_err,
+        "error/reference_side_direction_worst": reference_side_direction_worst_err,
         "error/object_pos": obj_pos_err,
         "error/object_delta": obj_delta_err,
         "error/object_rot": obj_rot_err,
