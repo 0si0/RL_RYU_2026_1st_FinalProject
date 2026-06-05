@@ -447,9 +447,11 @@ class GrEnv(DirectRLEnv):
             self.cfg.anchor_rotation_gate_scale,
             self.cfg.fingertip_reward_scale,
             self.cfg.fingertip_obj_proximity_reward_scale,
+            self.cfg.fingertip_obj_proximity_topk_mix,
             self.cfg.fingertip_obj_offset_reward_scale,
             self.cfg.object_reward_gate_base,
             self.cfg.contact_force_reward_weight,
+            self.cfg.pad_contact_force_mix,
             self.cfg.contact_count_reward_weight,
             self.cfg.contact_sustain_reward_weight,
             self.cfg.stable_grasp_reward_weight,
@@ -1097,9 +1099,11 @@ def compute_rewards(
     anchor_rotation_gate_scale: float,
     fingertip_reward_scale: float,
     fingertip_obj_proximity_reward_scale: float,
+    fingertip_obj_proximity_topk_mix: float,
     fingertip_obj_offset_reward_scale: float,
     object_reward_gate_base: float,
     contact_force_reward_weight: float,
+    pad_contact_force_mix: float,
     contact_count_reward_weight: float,
     contact_sustain_reward_weight: float,
     stable_grasp_reward_weight: float,
@@ -1195,12 +1199,22 @@ def compute_rewards(
     ref_contact_fingertip_obj_proximity_reward = torch.exp(
         -fingertip_obj_proximity_reward_scale * ref_contact_fingertip_obj_proximity_err
     )
+    topk_proximity_mix = min(max(fingertip_obj_proximity_topk_mix, 0.0), 1.0)
     fingertip_obj_proximity_reward = (
-        0.35 * topk_fingertip_obj_proximity_reward
-        + 0.65 * ref_contact_fingertip_obj_proximity_reward
+        topk_proximity_mix * topk_fingertip_obj_proximity_reward
+        + (1.0 - topk_proximity_mix) * ref_contact_fingertip_obj_proximity_reward
     )
     fingertip_obj_offset_reward = torch.exp(-fingertip_obj_offset_reward_scale * fingertip_obj_offset_err)
     contact_force_reward = torch.clamp(contact_force, 0.0, contact_reward_max_force) / (contact_reward_max_force + 1.0e-6)
+    projected_contact_force_reward = torch.clamp(projected_contact_force, 0.0, contact_reward_max_force) / (
+        contact_reward_max_force + 1.0e-6
+    )
+    pad_force_mix = min(max(pad_contact_force_mix, 0.0), 1.0)
+    contact_force_quality_reward = (
+        (1.0 - pad_force_mix) * contact_force_reward
+        + pad_force_mix * projected_contact_force_reward
+    )
+    contact_pad_alignment = torch.clamp(projected_contact_force / (contact_force + 1.0e-6), 0.0, 1.0)
     contact_count_reward = torch.clamp(num_contact_fingers / (target_contact_fingers + 1.0e-6), 0.0, 1.0)
     contact_sustain_reward = torch.clamp(contact_sustain, 0.0, 1.0)
     thumb_ref_weight = torch.clamp(ref_fingertip_contact_weights[:, 0], 0.0, 1.0)
@@ -1230,7 +1244,7 @@ def compute_rewards(
         + 0.10 * force_balance_reward
     )
     contact_reward = proximity_gate * (
-        contact_force_reward_weight * contact_force_reward
+        contact_force_reward_weight * contact_force_quality_reward
         + contact_count_reward_weight * contact_count_reward
         + contact_sustain_reward_weight * contact_sustain_reward
     )
@@ -1313,15 +1327,18 @@ def compute_rewards(
         + 0.15 * fingertip_obj_offset_reward
     )
     grasped_hand_ref_reward = stable_grasp_score * finger_topology_reward * (
-        0.35 * hand_pos_reward
-        + 0.25 * hand_anchor_reward
-        + 0.25 * hand_rot_reward
+        0.30 * hand_pos_reward
+        + 0.20 * hand_anchor_reward
+        + 0.20 * hand_rot_reward
         + 0.15 * hand_dof_reward
+        + 0.10 * finger_shape_reward
+        + 0.05 * fingertip_reward
     )
     successful_grasp_shape_reward = (
-        0.5 * hand_dof_reward
-        + 0.3 * fingertip_reward
-        + 0.2 * fingertip_obj_offset_reward
+        0.40 * hand_dof_reward
+        + 0.25 * finger_shape_reward
+        + 0.20 * fingertip_reward
+        + 0.15 * fingertip_obj_offset_reward
     )
     spread_quality_bonus = 1.0 - successful_grasp_spread_bonus_mix * (1.0 - finger_spread_reward)
     successful_grasp_shape_bonus = (
@@ -1390,6 +1407,8 @@ def compute_rewards(
         "reward/fingertip_obj_offset": fingertip_obj_offset_reward,
         "reward/contact": contact_reward,
         "reward/contact_force": contact_force_reward,
+        "reward/contact_force_quality": contact_force_quality_reward,
+        "reward/contact_force_projected": projected_contact_force_reward,
         "reward/contact_count": contact_count_reward,
         "reward/contact_sustain": contact_sustain_reward,
         "reward/stable_grasp": stable_grasp_reward,
@@ -1439,6 +1458,7 @@ def compute_rewards(
         "metric/non_thumb_contact_gate": non_thumb_contact_gate,
         "metric/force_balance": force_balance_reward,
         "metric/force_dominance": force_dominance,
+        "metric/contact_pad_alignment": contact_pad_alignment,
         "metric/approach_proximity_shape_gate": approach_proximity_shape_gate,
         "metric/object_relative_quality_gate": object_relative_quality_gate,
         "metric/no_contact_sustain": no_contact_sustain,
