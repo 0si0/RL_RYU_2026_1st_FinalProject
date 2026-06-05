@@ -247,8 +247,8 @@ class GrEnvCfg(DirectRLEnvCfg):
     finger_spread_collapse_margin = 0.0075
     finger_spread_min_ref_distance = 0.015
     finger_direction_error_weight = 0.02
-    finger_shape_contact_decay = 0.15
-    finger_topology_contact_decay = 0.45
+    finger_shape_contact_decay = 0.05
+    finger_topology_contact_decay = 0.30
     anchor_rotation_gate_scale = 20.0
     fingertip_reward_scale = 40.0
     fingertip_obj_proximity_reward_scale = 8.0
@@ -261,7 +261,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     stable_grasp_reward_weight = 0.8
     transport_support_reward_weight = 1.0
     obj_future_dir_reward_weight = 0.15
-    grasped_hand_ref_reward_weight = 0.8
+    grasped_hand_ref_reward_weight = 0.6
     task_tracking_reward_weight = 0.9
     early_imitation_reward_bonus = 0.6
     early_episode_tracking_frames = 70.0
@@ -271,8 +271,8 @@ class GrEnvCfg(DirectRLEnvCfg):
     grasp_object_bonus = 0.5
     manipulation_task_bonus = 0.6
     manipulation_imitation_bonus = 0.4
-    successful_grasp_dof_bonus_weight = 0.35
-    successful_grasp_spread_bonus_mix = 0.20
+    successful_grasp_dof_bonus_weight = 0.25
+    successful_grasp_spread_bonus_mix = 0.15
     pre_contact_pose_bonus_weight = 0.35
     no_contact_mano_imitation_floor = 0.25
     object_relative_reward_base = 0.35
