@@ -1253,28 +1253,26 @@ def compute_rewards(
     pre_contact_pose_gate = torch.clamp(1.0 - contact_sustain_reward, 0.0, 1.0)
     approach_proximity_gate = pre_contact_pose_gate * proximity_gate
     approach_proximity_shape_gate = 1.0 - approach_proximity_gate * (
-        1.0 - (0.25 + 0.75 * finger_shape_reward * finger_topology_reward)
+        1.0 - (0.5 + 0.5 * finger_shape_reward * finger_topology_reward)
     )
     fingertip_obj_proximity_reward = fingertip_obj_proximity_reward * approach_proximity_shape_gate
     pre_contact_base_pose_bonus = (
-        0.15 * hand_pos_reward
-        + 0.15 * hand_anchor_reward
-        + 0.10 * hand_rot_reward
-        + 0.20 * hand_dof_reward
+        0.20 * hand_pos_reward
+        + 0.20 * hand_anchor_reward
+        + 0.15 * hand_rot_reward
         + 0.25 * finger_shape_reward
-        + 0.10 * finger_topology_reward
+        + 0.15 * finger_topology_reward
         + 0.05 * fingertip_reward
     )
     pre_contact_near_pose_bonus = (
-        0.07 * hand_pos_reward
-        + 0.08 * hand_anchor_reward
-        + 0.05 * hand_rot_reward
-        + 0.25 * hand_dof_reward
-        + 0.40 * finger_shape_reward
-        + 0.10 * finger_topology_reward
-        + 0.05 * fingertip_reward
+        0.10 * hand_pos_reward
+        + 0.10 * hand_anchor_reward
+        + 0.10 * hand_rot_reward
+        + 0.35 * finger_shape_reward
+        + 0.25 * finger_topology_reward
+        + 0.10 * fingertip_reward
     )
-    pre_contact_near_shape_mix = 0.65 * proximity_gate
+    pre_contact_near_shape_mix = 0.35 * proximity_gate
     pre_contact_pose_bonus = pre_contact_pose_gate * (
         (1.0 - pre_contact_near_shape_mix) * pre_contact_base_pose_bonus
         + pre_contact_near_shape_mix * pre_contact_near_pose_bonus
