@@ -490,6 +490,31 @@ class GrEnv(DirectRLEnv):
             self.cfg.obj_angvel_reward_scale,
         )
 
+        logs_dict.update(
+            {
+                "terminate/early": self.early_terminate.float(),
+                "terminate/hand_far": self.hand_far_apart.float(),
+                "terminate/object_pos_far": self.obj_far_apart.float(),
+                "terminate/object_rot_far": self.obj_rot_far_apart.float(),
+                "terminate/no_grasp": self.no_grasp_failure.float(),
+                "diagnostic/episode_step": self.episode_length_buf.float(),
+                "diagnostic/no_contact_duration": self.no_contact_duration,
+                "diagnostic/contact_duration": self.contact_duration,
+                "diagnostic/object_rot_over_threshold": (
+                    self.obj_rot_err > self.cfg.obj_rot_terminate_threshold
+                ).float(),
+                "diagnostic/object_rot_after_grace": (
+                    self.episode_length_buf > self.cfg.obj_rot_terminate_after_steps
+                ).float(),
+                "diagnostic/no_grasp_after_grace": (
+                    self.episode_length_buf > self.cfg.no_grasp_terminate_after_steps
+                ).float(),
+                "diagnostic/no_contact_over_threshold": (
+                    self.no_contact_duration > self.cfg.no_grasp_terminate_grace_steps
+                ).float(),
+            }
+        )
+
         for key, value in logs_dict.items():
             if key not in self.logs_dict:
                 self.logs_dict[key] = value.detach()
