@@ -399,6 +399,9 @@ class GrEnv(DirectRLEnv):
             self.fingertip_obj_offset_err,
             self.fingertip_obj_ref_side_dir_err,
             self.object_grasp_anchor_err,
+            self.object_grasp_compact_err,
+            self.object_grasp_compact_mean_err,
+            self.object_grasp_compact_worst_err,
             self.object_grasp_axis_err,
             self.contact_force,
             self.projected_contact_force,
@@ -432,6 +435,7 @@ class GrEnv(DirectRLEnv):
             self.cfg.fingertip_obj_offset_reward_weight,
             self.cfg.reference_side_direction_reward_weight,
             self.cfg.object_grasp_anchor_reward_weight,
+            self.cfg.object_grasp_compact_reward_weight,
             self.cfg.contact_motion_support_reward_weight,
             self.cfg.pre_lift_grasp_readiness_reward_weight,
             self.cfg.contact_reward_weight,
@@ -459,6 +463,7 @@ class GrEnv(DirectRLEnv):
             self.cfg.reference_side_direction_weight_floor,
             self.cfg.reference_side_direction_manipulation_floor,
             self.cfg.object_grasp_anchor_reward_scale,
+            self.cfg.object_grasp_compact_reward_scale,
             self.cfg.object_grasp_axis_reward_scale,
             self.cfg.object_grasp_anchor_axis_mix,
             self.cfg.fingertip_obj_offset_reward_scale,
@@ -957,6 +962,34 @@ class GrEnv(DirectRLEnv):
             dim=-1,
             largest=False,
         ).indices
+        self.ref_object_grasp_anchor_tip_dist = torch.norm(
+            self.ref_fingertip_obj_local - self.ref_object_grasp_anchor_local.unsqueeze(1),
+            p=2,
+            dim=-1,
+        )
+        ref_anchor_topk_dist = self.ref_object_grasp_anchor_tip_dist.gather(1, ref_axis_idx)
+        self.ref_object_grasp_compact_radius = torch.max(ref_anchor_topk_dist, dim=-1).values
+        actual_anchor_topk_dist = self.object_grasp_anchor_tip_dist.gather(1, actual_axis_idx)
+        compact_target_radius = (
+            self.ref_object_grasp_compact_radius.unsqueeze(-1)
+            + self.cfg.object_grasp_compact_radius_margin
+        )
+        self.object_grasp_compact_excess = torch.clamp_min(
+            actual_anchor_topk_dist - compact_target_radius,
+            0.0,
+        )
+        self.object_grasp_compact_mean_err = self.object_grasp_compact_excess.mean(dim=-1)
+        compact_worst_weights = torch.softmax(
+            self.cfg.object_grasp_compact_softmax_scale * self.object_grasp_compact_excess,
+            dim=-1,
+        )
+        self.object_grasp_compact_worst_err = (
+            compact_worst_weights * self.object_grasp_compact_excess
+        ).sum(dim=-1)
+        self.object_grasp_compact_err = (
+            (1.0 - self.cfg.object_grasp_compact_worst_mix) * self.object_grasp_compact_mean_err
+            + self.cfg.object_grasp_compact_worst_mix * self.object_grasp_compact_worst_err
+        )
         ref_axis_points = self.ref_fingertip_obj_local.gather(
             1,
             ref_axis_idx.unsqueeze(-1).expand(-1, -1, 3),
@@ -1187,6 +1220,9 @@ def compute_rewards(
     fingertip_obj_offset_err: torch.Tensor,
     fingertip_obj_ref_side_dir_err: torch.Tensor,
     object_grasp_anchor_err: torch.Tensor,
+    object_grasp_compact_err: torch.Tensor,
+    object_grasp_compact_mean_err: torch.Tensor,
+    object_grasp_compact_worst_err: torch.Tensor,
     object_grasp_axis_err: torch.Tensor,
     contact_force: torch.Tensor,
     projected_contact_force: torch.Tensor,
@@ -1220,6 +1256,7 @@ def compute_rewards(
     fingertip_obj_offset_weight: float,
     reference_side_direction_weight: float,
     object_grasp_anchor_weight: float,
+    object_grasp_compact_weight: float,
     contact_motion_support_weight: float,
     pre_lift_grasp_readiness_weight: float,
     contact_weight: float,
@@ -1247,6 +1284,7 @@ def compute_rewards(
     reference_side_direction_weight_floor: float,
     reference_side_direction_manipulation_floor: float,
     object_grasp_anchor_reward_scale: float,
+    object_grasp_compact_reward_scale: float,
     object_grasp_axis_reward_scale: float,
     object_grasp_anchor_axis_mix: float,
     fingertip_obj_offset_reward_scale: float,
@@ -1368,8 +1406,9 @@ def compute_rewards(
     )
     reference_side_direction_reward = torch.exp(-reference_side_direction_reward_scale * reference_side_direction_err)
     object_grasp_anchor_reward = torch.exp(-object_grasp_anchor_reward_scale * object_grasp_anchor_err)
+    object_grasp_compact_reward = torch.exp(-object_grasp_compact_reward_scale * object_grasp_compact_err)
     object_grasp_axis_reward = torch.exp(-object_grasp_axis_reward_scale * object_grasp_axis_err)
-    object_grasp_region_reward = object_grasp_anchor_reward * (
+    object_grasp_region_reward = object_grasp_anchor_reward * object_grasp_compact_reward * (
         1.0 - object_grasp_anchor_axis_mix * (1.0 - object_grasp_axis_reward)
     )
     fingertip_obj_proximity_reward = (
@@ -1426,8 +1465,9 @@ def compute_rewards(
     )
     contact_motion_support_reward = (
         contact_sustain_reward
-        * (0.45 + 0.55 * stable_grasp_score)
+        * (0.60 + 0.40 * stable_grasp_score)
         * (0.55 + 0.45 * object_grasp_region_reward)
+        * (0.55 + 0.45 * contact_force_reward)
         * (
             0.45 * obj_delta_reward
             + 0.35 * obj_pos_reward
@@ -1538,7 +1578,9 @@ def compute_rewards(
         * object_grasp_region_reward
         * (0.35 + 0.65 * reference_side_direction_reward)
         * (0.35 + 0.65 * fingertip_obj_offset_reward)
-        * (0.45 + 0.55 * stable_grasp_score)
+        * (0.45 + 0.55 * object_grasp_compact_reward)
+        * (0.55 + 0.45 * contact_force_reward)
+        * (0.65 + 0.35 * stable_grasp_score)
         * (0.50 + 0.50 * finger_topology_reward)
     )
 
@@ -1566,6 +1608,7 @@ def compute_rewards(
         + object_relative_quality_gate * grasp_object_scale * object_relative_scale * fingertip_obj_offset_weight * fingertip_obj_offset_reward
         + no_contact_mano_gate * pose_imitation_scale * reference_side_direction_gate * reference_side_direction_weight * reference_side_direction_reward
         + no_contact_mano_gate * pose_imitation_scale * object_grasp_anchor_gate * object_grasp_anchor_weight * object_grasp_region_reward
+        + no_contact_mano_gate * pose_imitation_scale * object_grasp_anchor_gate * object_grasp_compact_weight * object_grasp_compact_reward
         + grasp_object_scale * task_scale * contact_weight * contact_reward
         + grasp_object_scale * task_scale * stable_grasp_reward_weight * stable_grasp_reward
         + object_gate * obj_pos_weight * obj_pos_reward
@@ -1604,6 +1647,7 @@ def compute_rewards(
         "reward/fingertip_obj_offset": fingertip_obj_offset_reward,
         "reward/reference_side_direction": reference_side_direction_reward,
         "reward/object_grasp_anchor": object_grasp_anchor_reward,
+        "reward/object_grasp_compact": object_grasp_compact_reward,
         "reward/object_grasp_axis": object_grasp_axis_reward,
         "reward/object_grasp_region": object_grasp_region_reward,
         "reward/contact": contact_reward,
@@ -1690,6 +1734,9 @@ def compute_rewards(
         "error/reference_side_direction_mean": reference_side_direction_mean_err,
         "error/reference_side_direction_worst": reference_side_direction_worst_err,
         "error/object_grasp_anchor": object_grasp_anchor_err,
+        "error/object_grasp_compact": object_grasp_compact_err,
+        "error/object_grasp_compact_mean": object_grasp_compact_mean_err,
+        "error/object_grasp_compact_worst": object_grasp_compact_worst_err,
         "error/object_grasp_axis": object_grasp_axis_err,
         "error/object_pos": obj_pos_err,
         "error/object_delta": obj_delta_err,
