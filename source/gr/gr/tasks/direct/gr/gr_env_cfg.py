@@ -296,7 +296,7 @@ class GrEnvCfg(DirectRLEnvCfg):
     obj_future_dir_min_distance = 0.02
     contact_topk_fingers = 3
     contact_sustain_target_steps = 8.0
-    reset_object_reference_velocity_scale = 0.5
+    reset_object_reference_velocity_scale = 0.0
     obj_pos_reward_scale = 20.0
     obj_delta_reward_scale = 20.0
     obj_rot_reward_scale = 2.0
@@ -307,7 +307,6 @@ class GrEnvCfg(DirectRLEnvCfg):
     obj_terminate_threshold = 0.35
     obj_rot_terminate_threshold = 1.0
     obj_rot_terminate_after_steps = 80.0
-    obj_rot_terminate_sustain_steps = 10.0
     no_grasp_terminate_after_steps = 110.0
     no_grasp_terminate_grace_steps = 70.0
     random_reference_phase_sampling = True
