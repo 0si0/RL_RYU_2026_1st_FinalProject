@@ -213,7 +213,6 @@ class GrEnvCfg(DirectRLEnvCfg):
     )
 
     action_dt = 1 / action_fps
-    finger_action_residual_scale = 0.45
     
     action_penalty_scale = -0.002
     dof_penalty_scale = -0.001
@@ -312,12 +311,12 @@ class GrEnvCfg(DirectRLEnvCfg):
     no_grasp_terminate_grace_steps = 70.0
     random_reference_phase_sampling = True
     reference_phase_min_remaining_steps = 45
-    reference_phase_frame0_ratio = 0.40
-    reference_phase_frame0_ratio_start = 0.75
-    reference_phase_uniform_ratio_start = 0.25
-    reference_phase_uniform_ratio = 0.60
+    reference_phase_frame0_ratio = 0.50
+    reference_phase_frame0_ratio_start = 0.85
+    reference_phase_uniform_ratio_start = 0.10
+    reference_phase_uniform_ratio = 0.30
     reference_phase_curriculum_steps = 60000
-    success_biased_phase_sampling = False
+    success_biased_phase_sampling = True
     success_phase_weight_decay = 0.995
     success_phase_weight_gain = 0.2
     success_phase_spread = 4

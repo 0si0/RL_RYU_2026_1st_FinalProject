@@ -326,21 +326,11 @@ class GrEnv(DirectRLEnv):
         )
 
         
-        # Interpret finger actions as residuals around the current reference pose.
-        # A zero policy now follows the demonstrated hand shape, while the policy
-        # can still correct MANO-to-Shadow mismatch and physically feasible grasps.
-        ref_frame_ids = torch.clamp(
-            self.episode_length_buf.long(),
-            0,
-            self.hand_dof_seq.shape[0] - 1,
-        )
-        ref_dof_targets = self.hand_dof_seq[ref_frame_ids][:, self.actuated_dof_indices]
-        dof_lower = self.hand_dof_lower_limits[:, self.actuated_dof_indices]
-        dof_upper = self.hand_dof_upper_limits[:, self.actuated_dof_indices]
-        dof_range = dof_upper - dof_lower
-        self.cur_dof_actions[:, self.actuated_dof_indices] = (
-            ref_dof_targets
-            + finger_actions * dof_range * self.cfg.finger_action_residual_scale
+        # Scale DoF and Smooth finger actions
+        self.cur_dof_actions[:, self.actuated_dof_indices] = scale(
+            finger_actions,
+            self.hand_dof_lower_limits[:, self.actuated_dof_indices],
+            self.hand_dof_upper_limits[:, self.actuated_dof_indices],
         )
         
         self.cur_dof_actions[:, self.actuated_dof_indices] = (
