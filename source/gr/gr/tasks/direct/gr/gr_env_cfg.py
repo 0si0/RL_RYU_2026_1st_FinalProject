@@ -19,9 +19,9 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 PROJECT_ROOT = Path(__file__).resolve().parents[6]
 
 # # Main sequence
-SEQ_PATH = str(PROJECT_ROOT / "data" / "HOCAP" / "sequence1" / "sequence1.pt")
-OBJ_PATH = str(PROJECT_ROOT / "data" / "HOCAP" / "object" / "sequence1.usd")
-END_FRAME = 250
+# SEQ_PATH = str(PROJECT_ROOT / "data" / "HOCAP" / "sequence1" / "sequence1.pt")
+# OBJ_PATH = str(PROJECT_ROOT / "data" / "HOCAP" / "object" / "sequence1.usd")
+# END_FRAME = 250
 
 # Optional sequence
 # SEQ_PATH = str(PROJECT_ROOT / "data" / "HOCAP" / "sequence2" / "sequence2.pt")
@@ -29,9 +29,9 @@ END_FRAME = 250
 # END_FRAME = 660
 
 # # Optional sequence
-# SEQ_PATH = str(PROJECT_ROOT / "data" / "HOCAP" / "sequence3" / "sequence3.pt")
-# OBJ_PATH = str(PROJECT_ROOT / "data" / "HOCAP" / "object" / "sequence3.usd")
-# END_FRAME = 510
+SEQ_PATH = str(PROJECT_ROOT / "data" / "HOCAP" / "sequence3" / "sequence3.pt")
+OBJ_PATH = str(PROJECT_ROOT / "data" / "HOCAP" / "object" / "sequence3.usd")
+END_FRAME = 510
 
 
 @configclass
