@@ -139,6 +139,9 @@ class GrEnv(DirectRLEnv):
         self.fingertip_contact_force_norm = torch.zeros((self.num_envs, self.num_fingertips), device=self.device)
         self.contact_duration = torch.zeros((self.num_envs, ), device=self.device)
         self.no_contact_duration = torch.zeros((self.num_envs, ), device=self.device)
+        self.contact_sustain = torch.zeros((self.num_envs, ), device=self.device)
+        self.no_contact_sustain = torch.zeros((self.num_envs, ), device=self.device)
+        self.proximity_gate = torch.zeros((self.num_envs, ), device=self.device)
         self.phase_success_score = torch.zeros((self.num_envs, ), device=self.device)
 
         # joint limits
@@ -149,6 +152,13 @@ class GrEnv(DirectRLEnv):
         # delta
         self.delta_obj_pos = torch.zeros((self.num_envs, 3), device=self.device)
         self.delta_fingertip_pos = torch.zeros((self.num_envs, self.num_fingertips), device=self.device)
+        self.object_assist_force = torch.zeros((self.num_envs, 3), device=self.device)
+        self.object_assist_torque = torch.zeros((self.num_envs, 3), device=self.device)
+        self.object_assist_gate = torch.zeros((self.num_envs, ), device=self.device)
+        self.object_motion_progress_reward = torch.zeros((self.num_envs, ), device=self.device)
+        self.object_linear_progress_reward = torch.zeros((self.num_envs, ), device=self.device)
+        self.object_angular_progress_reward = torch.zeros((self.num_envs, ), device=self.device)
+        self.object_assist_api_mode = -1
         
         # delta_value
         self.delta_obj_pos_value = torch.zeros((self.num_envs, ), device=self.device)
@@ -324,6 +334,7 @@ class GrEnv(DirectRLEnv):
             full_torques,
             is_global=True,
         )
+        self._apply_object_assist()
 
         
         # Scale DoF and Smooth finger actions
@@ -350,6 +361,86 @@ class GrEnv(DirectRLEnv):
             self.cur_dof_actions[:, self.actuated_dof_indices],
             joint_ids=self.actuated_dof_indices
         )
+
+
+    def _clamp_vector_norm(self, value: torch.Tensor, max_norm: float) -> torch.Tensor:
+        norm = torch.norm(value, p=2, dim=-1, keepdim=True)
+        scale = torch.clamp(max_norm / (norm + 1.0e-6), max=1.0)
+        return torch.nan_to_num(value * scale)
+
+
+    def _apply_object_assist(self) -> None:
+        assist_progress = float(
+            np.clip(
+                getattr(self, "common_step_counter", 0) / max(1, self.cfg.object_assist_curriculum_steps),
+                0.0,
+                1.0,
+            )
+        )
+        assist_strength = 0.0 if self.play else 1.0 - assist_progress
+
+        obj_pos_lag = self.obj_pos_ref - self.obj_pos
+        obj_rot_lag_quat = F.normalize(quat_mul(self.obj_rot_ref, quat_conjugate(self.obj_rot)), dim=-1)
+        obj_rot_lag = torch.clamp(axis_angle_from_quat(obj_rot_lag_quat), -1.0, 1.0)
+        obj_linvel_lag = torch.clamp(self.obj_linvel_ref - self.obj_linvel, -1.5, 1.5)
+        obj_angvel_lag = torch.clamp(self.obj_angvel_ref - self.obj_angvel, -5.0, 5.0)
+
+        ref_lin_motion = torch.norm(self.obj_linvel_ref, p=2, dim=-1) / (
+            self.cfg.object_motion_progress_linvel_scale + 1.0e-6
+        )
+        ref_ang_motion = torch.norm(self.obj_angvel_ref, p=2, dim=-1) / (
+            self.cfg.object_motion_progress_angvel_scale + 1.0e-6
+        )
+        ref_motion_gate = torch.clamp(torch.maximum(ref_lin_motion, ref_ang_motion), 0.0, 1.0)
+        lag_gate = torch.clamp(
+            torch.maximum(
+                torch.norm(obj_pos_lag, p=2, dim=-1) / 0.015,
+                torch.norm(obj_rot_lag, p=2, dim=-1) / 0.25,
+            ),
+            0.0,
+            1.0,
+        )
+        contact_gate = torch.clamp(
+            self.cfg.object_assist_contact_floor * self.proximity_gate
+            + (1.0 - self.cfg.object_assist_contact_floor) * self.contact_sustain,
+            0.0,
+            1.0,
+        )
+        self.object_assist_gate = torch.nan_to_num(
+            assist_strength * ref_motion_gate * lag_gate * contact_gate
+        ).clamp(0.0, 1.0)
+
+        force_cmd = (
+            self.cfg.object_assist_force_gain * obj_pos_lag
+            + self.cfg.object_assist_force_damping * obj_linvel_lag
+        )
+        torque_cmd = (
+            self.cfg.object_assist_torque_gain * obj_rot_lag
+            + self.cfg.object_assist_torque_damping * obj_angvel_lag
+        )
+        self.object_assist_force = self._clamp_vector_norm(
+            self.object_assist_gate.unsqueeze(-1) * force_cmd,
+            self.cfg.object_assist_max_force,
+        )
+        self.object_assist_torque = self._clamp_vector_norm(
+            self.object_assist_gate.unsqueeze(-1) * torque_cmd,
+            self.cfg.object_assist_max_torque,
+        )
+
+        if hasattr(self.object, "set_external_force_and_torque") and self.object_assist_api_mode != 0:
+            assist_force = self.object_assist_force.unsqueeze(1)
+            assist_torque = self.object_assist_torque.unsqueeze(1)
+            if self.object_assist_api_mode == 1:
+                self.object.set_external_force_and_torque(assist_force, assist_torque, is_global=True)
+            elif self.object_assist_api_mode == 2:
+                self.object.set_external_force_and_torque(assist_force, assist_torque)
+            else:
+                try:
+                    self.object.set_external_force_and_torque(assist_force, assist_torque, is_global=True)
+                    self.object_assist_api_mode = 1
+                except TypeError:
+                    self.object.set_external_force_and_torque(assist_force, assist_torque)
+                    self.object_assist_api_mode = 2
 
 
     def _get_observations(self) -> dict:
@@ -416,6 +507,9 @@ class GrEnv(DirectRLEnv):
             self.obj_linvel_error,
             self.obj_angvel_error,
             self.obj_future_dir_reward,
+            self.object_motion_progress_reward,
+            self.object_linear_progress_reward,
+            self.object_angular_progress_reward,
             curriculum_progress,
             early_episode_gate,
             self.cfg.hand_reward_weight,
@@ -463,6 +557,7 @@ class GrEnv(DirectRLEnv):
             self.cfg.stable_grasp_reward_weight,
             self.cfg.transport_support_reward_weight,
             self.cfg.obj_future_dir_reward_weight,
+            self.cfg.object_motion_progress_reward_weight,
             self.cfg.grasped_hand_ref_reward_weight,
             self.cfg.task_tracking_reward_weight,
             self.cfg.early_imitation_reward_bonus,
@@ -491,6 +586,9 @@ class GrEnv(DirectRLEnv):
             self.cfg.obj_vel_reward_scale,
             self.cfg.obj_angvel_reward_scale,
         )
+        logs_dict["metric/object_assist_gate"] = self.object_assist_gate
+        logs_dict["metric/object_assist_force"] = torch.norm(self.object_assist_force, p=2, dim=-1)
+        logs_dict["metric/object_assist_torque"] = torch.norm(self.object_assist_torque, p=2, dim=-1)
 
         for key, value in logs_dict.items():
             if key not in self.logs_dict:
@@ -532,7 +630,16 @@ class GrEnv(DirectRLEnv):
         self.successes[env_ids] = 0
         self.contact_duration[env_ids] = 0
         self.no_contact_duration[env_ids] = 0
+        self.contact_sustain[env_ids] = 0
+        self.no_contact_sustain[env_ids] = 0
+        self.proximity_gate[env_ids] = 0
         self.phase_success_score[env_ids] = 0
+        self.object_assist_force[env_ids] = 0
+        self.object_assist_torque[env_ids] = 0
+        self.object_assist_gate[env_ids] = 0
+        self.object_motion_progress_reward[env_ids] = 0
+        self.object_linear_progress_reward[env_ids] = 0
+        self.object_angular_progress_reward[env_ids] = 0
         self._compute_intermediate_values()
 
 
@@ -957,6 +1064,44 @@ class GrEnv(DirectRLEnv):
             1.0,
         )
         self.obj_future_dir_reward = torch.clamp((obj_linvel_dir * obj_future_dir).sum(dim=-1), 0.0, 1.0) * obj_future_dist_gate
+        ref_linvel_norm = torch.norm(self.obj_linvel_ref, p=2, dim=-1)
+        obj_linvel_norm = torch.norm(self.obj_linvel, p=2, dim=-1)
+        ref_angvel_norm = torch.norm(self.obj_angvel_ref, p=2, dim=-1)
+        obj_angvel_norm = torch.norm(self.obj_angvel, p=2, dim=-1)
+        lin_motion_gate = torch.clamp(
+            ref_linvel_norm / (self.cfg.object_motion_progress_linvel_scale + 1.0e-6),
+            0.0,
+            1.0,
+        ) * torch.clamp(
+            obj_linvel_norm / (self.cfg.object_motion_progress_linvel_scale + 1.0e-6),
+            0.0,
+            1.0,
+        )
+        ang_motion_gate = torch.clamp(
+            ref_angvel_norm / (self.cfg.object_motion_progress_angvel_scale + 1.0e-6),
+            0.0,
+            1.0,
+        ) * torch.clamp(
+            obj_angvel_norm / (self.cfg.object_motion_progress_angvel_scale + 1.0e-6),
+            0.0,
+            1.0,
+        )
+        lin_align = torch.clamp(
+            (F.normalize(self.obj_linvel, dim=-1, eps=1.0e-6) * F.normalize(self.obj_linvel_ref, dim=-1, eps=1.0e-6)).sum(dim=-1),
+            0.0,
+            1.0,
+        )
+        ang_align = torch.clamp(
+            (F.normalize(self.obj_angvel, dim=-1, eps=1.0e-6) * F.normalize(self.obj_angvel_ref, dim=-1, eps=1.0e-6)).sum(dim=-1),
+            0.0,
+            1.0,
+        )
+        motion_contact_gate = torch.clamp(0.35 * self.proximity_gate + 0.65 * self.contact_sustain, 0.0, 1.0)
+        self.object_linear_progress_reward = motion_contact_gate * lin_motion_gate * lin_align
+        self.object_angular_progress_reward = motion_contact_gate * ang_motion_gate * ang_align
+        self.object_motion_progress_reward = torch.nan_to_num(
+            0.45 * self.object_linear_progress_reward + 0.55 * self.object_angular_progress_reward
+        ).clamp(0.0, 1.0)
 
         self.delta_obj_pos = self.obj_pos_error
         self.delta_obj_pos_value = self.obj_pos_err
@@ -1104,6 +1249,9 @@ def compute_rewards(
     obj_linvel_error: torch.Tensor,
     obj_angvel_error: torch.Tensor,
     obj_future_dir_reward: torch.Tensor,
+    object_motion_progress_reward: torch.Tensor,
+    object_linear_progress_reward: torch.Tensor,
+    object_angular_progress_reward: torch.Tensor,
     curriculum_progress: torch.Tensor,
     early_episode_gate: torch.Tensor,
     hand_weight: float,
@@ -1151,6 +1299,7 @@ def compute_rewards(
     stable_grasp_reward_weight: float,
     transport_support_reward_weight: float,
     obj_future_dir_reward_weight: float,
+    object_motion_progress_reward_weight: float,
     grasped_hand_ref_reward_weight: float,
     task_tracking_reward_weight: float,
     early_imitation_reward_bonus: float,
@@ -1423,6 +1572,7 @@ def compute_rewards(
         + object_gate * obj_vel_weight * obj_vel_reward
         + task_scale * transport_support_reward_weight * transport_support_reward
         + task_scale * obj_future_dir_reward_weight * stable_grasp_score * obj_future_dir_reward
+        + task_scale * object_motion_progress_reward_weight * object_motion_progress_reward
         + task_scale * grasped_hand_ref_reward_weight * grasped_hand_ref_reward
         + task_scale * task_tracking_reward_weight * task_tracking_reward
         + pre_contact_pose_bonus_weight * pre_contact_pose_bonus
@@ -1458,6 +1608,9 @@ def compute_rewards(
         "reward/stable_grasp": stable_grasp_reward,
         "reward/transport_support": transport_support_reward,
         "reward/object_future_dir": obj_future_dir_reward,
+        "reward/object_motion_progress": object_motion_progress_reward,
+        "reward/object_linear_progress": object_linear_progress_reward,
+        "reward/object_angular_progress": object_angular_progress_reward,
         "reward/object_tracking": object_tracking_reward,
         "reward/hand_tracking": hand_tracking_reward,
         "reward/task_tracking": task_tracking_reward,
