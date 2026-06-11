@@ -3,6 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+import os
 from pathlib import Path
 from gr.asset.shadow_hand import SHADOW_HAND_CFG
 import isaaclab.sim as sim_utils
@@ -18,20 +19,18 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 PROJECT_ROOT = Path(__file__).resolve().parents[6]
 
-# # Main sequence
-# SEQ_PATH = str(PROJECT_ROOT / "data" / "HOCAP" / "sequence1" / "sequence1.pt")
-# OBJ_PATH = str(PROJECT_ROOT / "data" / "HOCAP" / "object" / "sequence1.usd")
-# END_FRAME = 250
+SEQUENCE_END_FRAMES = {
+    "sequence1": 250,
+    "sequence2": 660,
+    "sequence3": 510,
+}
+SEQUENCE_NAME = os.environ.get("GR_SEQUENCE", "sequence3")
+if SEQUENCE_NAME not in SEQUENCE_END_FRAMES:
+    raise ValueError(f"Unknown GR_SEQUENCE={SEQUENCE_NAME!r}. Expected one of {tuple(SEQUENCE_END_FRAMES)}.")
 
-# Optional sequence
-# SEQ_PATH = str(PROJECT_ROOT / "data" / "HOCAP" / "sequence2" / "sequence2.pt")
-# OBJ_PATH = str(PROJECT_ROOT / "data" / "HOCAP" / "object" / "sequence2.usd")
-# END_FRAME = 660
-
-# # Optional sequence
-SEQ_PATH = str(PROJECT_ROOT / "data" / "HOCAP" / "sequence3" / "sequence3.pt")
-OBJ_PATH = str(PROJECT_ROOT / "data" / "HOCAP" / "object" / "sequence3.usd")
-END_FRAME = 510
+SEQ_PATH = str(PROJECT_ROOT / "data" / "HOCAP" / SEQUENCE_NAME / f"{SEQUENCE_NAME}.pt")
+OBJ_PATH = str(PROJECT_ROOT / "data" / "HOCAP" / "object" / f"{SEQUENCE_NAME}.usd")
+END_FRAME = SEQUENCE_END_FRAMES[SEQUENCE_NAME]
 
 
 @configclass
